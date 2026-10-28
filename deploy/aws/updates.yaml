@@ -1,0 +1,52 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  StitchPilot update site: a public-read S3 bucket holding each release's app files and the signed
+  latest.json that copies of StitchPilot check (see UPDATES.md). Anyone can read it; only your AWS
+  account can write it, and the app ignores anything not signed with your update key.
+
+Parameters:
+  BucketName:
+    Type: String
+    Default: stitchpilot-updates
+    Description: Globally unique bucket name (add something of your own if this one is taken)
+
+Resources:
+  UpdatesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:  # public reads come only from the policy below
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: false
+        RestrictPublicBuckets: false
+      LifecycleConfiguration:
+        Rules:
+          - Id: clean-up-unfinished-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 2
+
+  PublicRead:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref UpdatesBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PublicReadReleases
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "${UpdatesBucket.Arn}/*"
+
+Outputs:
+  UploadTo:
+    Description: --upload value for build/publish_update.py
+    Value: !Sub "s3://${UpdatesBucket}"
+  UpdateUrl:
+    Description: UPDATE_URL for stitchpilot/updates.py
+    Value: !Sub "https://${UpdatesBucket.RegionalDomainName}/latest.json"

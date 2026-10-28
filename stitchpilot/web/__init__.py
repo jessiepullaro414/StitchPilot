@@ -1,0 +1,1 @@
+"""StitchPilot web app."""

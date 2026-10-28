@@ -1,0 +1,51 @@
+# Runs every test on real Windows and Mac machines for each push and pull request.
+# Also run by release.yml before anything is built.
+#
+# Security: read-only token, no secrets, actions pinned to exact commits (Dependabot keeps them current).
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.14"
+
+      - name: Install packages
+        run: python -m pip install -r requirements.txt -r requirements-lambda.txt
+
+      - name: Run tests
+        run: python tests/run_all.py
+
+      - name: Keep test pictures for a look
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: test-output-${{ matrix.os }}
+          path: tests/out/
+          retention-days: 7

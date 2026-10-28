@@ -1,0 +1,2 @@
+# Tools for building the app (build_exe.ps1, build_mac.sh), pinned like requirements.txt.
+pyinstaller==6.22.3

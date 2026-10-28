@@ -1,0 +1,6 @@
+# Used instead of .dockerignore when building Dockerfile.lambda with BuildKit (docker build -f Dockerfile.lambda .).
+*
+!requirements-web.txt
+!requirements-lambda.txt
+!stitchpilot
+stitchpilot/**/__pycache__

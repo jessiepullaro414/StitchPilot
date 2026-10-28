@@ -1,0 +1,137 @@
+# Builds a release when a version tag is pushed (git tag v0.2.0 && git push origin v0.2.0):
+# tests, then the Windows exe and the Mac apps, then a DRAFT GitHub release with the files attached.
+#
+# Nothing goes out to users from here. The draft stays hidden until you publish it, and app updates
+# only go out when you sign them on your own computer with build/publish_update.py (deploy/aws/UPDATES.md).
+# The signing key never comes near GitHub.
+#
+# Each file gets a build attestation: proof it was built by this workflow from this repo's code, which
+# you can check before signing:  gh attestation verify <file> -R jessiepullaro414/StitchPilot
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the tag matches the app version
+        id: v
+        run: |
+          v=$(python3 -c 'import re; print(re.search(r"__version__\s*=\s*\"([^\"]+)\"", open("stitchpilot/__init__.py").read())[1])')
+          if [ "v$v" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match __version__ $v in stitchpilot/__init__.py"
+            exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+  test:
+    needs: version
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  windows:
+    needs: [version, test]
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.14"
+      - name: Build
+        shell: pwsh
+        run: |
+          ./build/build_exe.ps1
+          Move-Item dist/StitchPilot.exe "dist/StitchPilot-$env:VERSION.exe"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-path: dist/StitchPilot-${{ env.VERSION }}.exe
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: windows
+          path: dist/StitchPilot-${{ env.VERSION }}.exe
+          if-no-files-found: error
+
+  mac:
+    needs: [version, test]
+    strategy:
+      matrix:
+        include:
+          - runner: macos-latest  # Apple Silicon
+            arch: arm64
+          - runner: macos-15-intel  # older Intel Macs
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.14"
+      - name: Build
+        run: |
+          bash build/build_mac.sh
+          mv "dist/StitchPilot-mac-$ARCH.zip" "dist/StitchPilot-$VERSION-mac-$ARCH.zip"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-path: dist/StitchPilot-${{ env.VERSION }}-mac-${{ matrix.arch }}.zip
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: mac-${{ matrix.arch }}
+          path: dist/StitchPilot-${{ env.VERSION }}-mac-${{ matrix.arch }}.zip
+          if-no-files-found: error
+
+  draft:
+    needs: [version, windows, mac]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # only this job can write, and it only makes a draft release
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          path: files
+          merge-multiple: true
+      - name: Make a draft release
+        run: |
+          cd files
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          gh release create "$GITHUB_REF_NAME" * --draft --verify-tag --title "StitchPilot $VERSION" \
+            --notes "Built by GitHub Actions from $GITHUB_SHA. Check a file with: gh attestation verify <file> -R $GH_REPO"

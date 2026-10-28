@@ -1,0 +1,15 @@
+# StitchPilot web app (python -m stitchpilot.web). Pinned to the versions it was tested with.
+numpy==2.5.4
+pillow==13.0.0
+pillow-heif==1.8.1
+opencv-python-headless==5.0.0.93
+shapely==2.2.0
+scikit-image==0.26.0
+scipy==1.18.1
+pyembroidery==1.5.1
+PySide6==6.12.0
+anthropic==2.3.0
+pydantic==2.14.1
+starlette==0.52.1
+uvicorn==0.54.0
+python-multipart==0.0.32

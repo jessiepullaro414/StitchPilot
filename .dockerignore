@@ -1,0 +1,5 @@
+*
+!requirements-web.txt
+!requirements-lambda.txt
+!stitchpilot
+stitchpilot/**/__pycache__

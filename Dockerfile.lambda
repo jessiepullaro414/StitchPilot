@@ -1,0 +1,35 @@
+# StitchPilot web app as an AWS Lambda container image (behind a Lambda Function URL).
+# Built by AWS SAM (see deploy/aws/template.yaml and deploy/aws/README.md):
+#   sam build --template-file deploy/aws/template.yaml
+# or by hand, from the repository root:
+#   docker build -f Dockerfile.lambda -t stitchpilot-lambda .
+#
+# The base image is Amazon Linux 2023; its package manager is microdnf (also available as `dnf`).
+FROM public.ecr.aws/lambda/python:3.13
+
+# Qt (used offscreen for lettering and PDF templates) needs a few system libraries, and lettering needs fonts.
+# All of these package names exist in Amazon Linux 2023 (checked against the AL2023 package list).
+RUN dnf install -y \
+        mesa-libGL mesa-libEGL libglvnd-glx libglvnd-egl mesa-libgbm \
+        fontconfig freetype libxkbcommon dbus-libs glib2 \
+        dejavu-sans-fonts dejavu-serif-fonts dejavu-sans-mono-fonts \
+        liberation-sans-fonts liberation-serif-fonts liberation-mono-fonts \
+        google-noto-sans-fonts google-noto-serif-fonts \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf /var/cache/yum
+
+COPY requirements-web.txt requirements-lambda.txt ${LAMBDA_TASK_ROOT}/
+RUN pip install --no-cache-dir -r ${LAMBDA_TASK_ROOT}/requirements-lambda.txt --target "${LAMBDA_TASK_ROOT}"
+
+COPY stitchpilot ${LAMBDA_TASK_ROOT}/stitchpilot
+
+# Lambda only lets a function write to /tmp, so Qt and fontconfig get their caches and runtime dir there.
+# STITCHPILOT_BUCKET and STITCHPILOT_ALLOWED_ORIGIN are set by the SAM template.
+ENV STITCHPILOT_MODE=lambda \
+    QT_QPA_PLATFORM=offscreen \
+    HOME=/tmp \
+    XDG_CACHE_HOME=/tmp/.cache \
+    XDG_RUNTIME_DIR=/tmp \
+    PYTHONUNBUFFERED=1
+
+CMD ["stitchpilot.web.lambda_handler.handler"]

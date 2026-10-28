@@ -1,0 +1,82 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  StitchPilot AI gateway: the desktop app's AI requests go through this function, which checks the
+  member's StitchPilot Plus allowance with stitchpilot.jessiescars.com and calls Claude / OpenAI with
+  StitchPilot's own keys. Standard library only: deploys as a tiny zip.
+  Deploy:  sam deploy --guided --template-file deploy/aws/gateway.yaml --stack-name stitchpilot-gateway
+
+Parameters:
+  AnthropicApiKey:
+    Type: String
+    NoEcho: true
+    Description: Your Anthropic API key (console.anthropic.com). Pays for Claude requests.
+  OpenAIApiKey:
+    Type: String
+    NoEcho: true
+    Description: Your OpenAI API key (platform.openai.com). Pays for AI pictures.
+  GatewaySecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: >
+      A long random secret shared with the shop (set the same value as STITCHPILOT_GATEWAY_SECRET in the
+      Amplify app's environment variables). Make one with: python -c "import secrets; print(secrets.token_urlsafe(48))"
+  ShopUrl:
+    Type: String
+    Default: https://stitchpilot.jessiescars.com
+    AllowedPattern: '^https://[^/\s]+$'
+    Description: Where the allowance is checked (no trailing slash).
+  ReservedConcurrency:
+    Type: Number
+    Default: 10
+    MinValue: -1
+    Description: >
+      Most requests handled at once (caps cost if something goes wrong). -1 = no reservation (needed on
+      brand-new accounts whose total Lambda limit is only 10).
+
+Conditions:
+  HasReservedConcurrency: !Not [!Equals [!Ref ReservedConcurrency, -1]]
+
+Resources:
+  GatewayLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 14
+
+  Gateway:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: python3.13
+      Architectures: [arm64]
+      CodeUri: ../../gateway/
+      Handler: stitchpilot_gateway.lambda_handler
+      MemorySize: 256
+      Timeout: 300  # AI pictures and Claude's design analysis can take a minute or more
+      ReservedConcurrentExecutions: !If [HasReservedConcurrency, !Ref ReservedConcurrency, !Ref "AWS::NoValue"]
+      LoggingConfig:
+        LogGroup: !Ref GatewayLogGroup
+      Environment:
+        Variables:
+          ANTHROPIC_API_KEY: !Ref AnthropicApiKey
+          OPENAI_API_KEY: !Ref OpenAIApiKey
+          STITCHPILOT_GATEWAY_SECRET: !Ref GatewaySecret
+          STITCHPILOT_SHOP_URL: !Ref ShopUrl
+      FunctionUrlConfig:
+        AuthType: NONE  # the app authenticates with its device token; the gateway checks it with the shop
+        InvokeMode: BUFFERED
+
+  # Public Function URLs created since late 2025 need lambda:InvokeFunction alongside the
+  # lambda:InvokeFunctionUrl permission SAM adds (see deploy/aws/template.yaml).
+  GatewayUrlInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref Gateway
+      Action: lambda:InvokeFunction
+      Principal: "*"
+      InvokedViaFunctionUrl: true
+
+Outputs:
+  GatewayUrl:
+    Description: The gateway's address. Put it in StitchPilot (stitchpilot/account.py GATEWAY_URL) without the trailing slash.
+    Value: !GetAtt GatewayUrl.FunctionUrl

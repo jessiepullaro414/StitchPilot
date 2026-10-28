@@ -1,0 +1,21 @@
+# AWS Amplify Hosting build spec, for an app connected to a Git repository.
+# (For a manual zip upload, run deploy/aws/build_site.py yourself instead; see deploy/aws/README.md.)
+#
+# Set these in the Amplify console under Hosting > Environment variables:
+#   STITCHPILOT_API_URL   the FunctionUrl output of the SAM stack, without a trailing slash
+#   STITCHPILOT_BUCKET    the BucketName output of the SAM stack
+#   STITCHPILOT_REGION    the region you deployed to, e.g. us-east-1 (falls back to Amplify's AWS_REGION)
+version: 1
+frontend:
+  phases:
+    build:
+      commands:
+        - PY=$(command -v python3 || command -v python)
+        - $PY deploy/aws/build_site.py --api-url "$STITCHPILOT_API_URL" --bucket "$STITCHPILOT_BUCKET" --region "${STITCHPILOT_REGION:-$AWS_REGION}" --out dist/site
+        # Amplify reads customHttp.yml from the repository root; the build wrote it with the real CSP,
+        # so put a copy there too (the copy inside the site folder covers manual-style deploys).
+        - cp dist/site/customHttp.yml customHttp.yml
+  artifacts:
+    baseDirectory: dist/site
+    files:
+      - '**/*'

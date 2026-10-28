@@ -1,0 +1,16 @@
+# StitchPilot desktop app. Pinned to the versions it was tested with, so every build is the same
+# (Dependabot suggests updates, and the tests run on each one before it's merged).
+numpy==2.5.4
+pillow==13.0.0
+pillow-heif==1.8.1
+opencv-python-headless==5.0.0.93
+shapely==2.2.0
+scikit-image==0.26.0
+scipy==1.18.1
+pyembroidery==1.5.1
+PySide6==6.12.0
+anthropic==2.3.0
+openai==3.40.0
+cryptography==50.0.2  # checks the signature on app updates
+# optional: neural background removal for busy photos (large download)
+# rembg[cpu]

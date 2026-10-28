@@ -1,0 +1,23 @@
+# Weekly pull requests to update the pinned packages and GitHub actions; the tests run on each one.
+# cooldown: a new version must be out for a week first, so a hijacked release is usually caught before it gets here.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: pip
+    directories: ["/", "/build"]
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]

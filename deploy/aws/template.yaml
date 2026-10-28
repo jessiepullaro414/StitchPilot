@@ -1,0 +1,161 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  StitchPilot web API: one Lambda container function behind a Function URL, plus a private S3 bucket
+  for uploads and cached designs. The web page itself is hosted separately (AWS Amplify Hosting).
+
+Parameters:
+  AllowedOrigin:
+    Type: String
+    Default: "https://example.com"
+    AllowedPattern: '^https://[^/\s]+$'
+    ConstraintDescription: The Amplify site origin, https://... with no path and no trailing slash.
+    Description: >
+      Origin of the Amplify site that serves the page, e.g. https://main.d123abc.amplifyapp.com
+      (no trailing slash). Allowed to call the Function URL and to upload to the bucket. The first time
+      you deploy you can leave the placeholder, then redeploy with the real address.
+  ReservedConcurrency:
+    Type: Number
+    Default: 5
+    MinValue: -1
+    Description: >
+      Most copies of the function that may run at once (caps cost and abuse). 0 switches the app off.
+      -1 means no reservation (needed on brand-new AWS accounts whose total Lambda limit is only 10).
+
+Conditions:
+  HasReservedConcurrency: !Not [!Equals [!Ref ReservedConcurrency, -1]]
+
+Resources:
+  # ---------------------------------------------------------------- storage
+  Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - BucketKeyEnabled: true
+            ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-uploads
+            Status: Enabled
+            Prefix: uploads/
+            ExpirationInDays: 1
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+          - Id: expire-cache
+            Status: Enabled
+            Prefix: cache/
+            ExpirationInDays: 1
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+      CorsConfiguration:
+        CorsRules:
+          # the browser uploads straight to S3 with a presigned POST
+          - AllowedOrigins: [!Ref AllowedOrigin]
+            AllowedMethods: [POST, GET, HEAD]
+            AllowedHeaders: ["*"]
+            ExposedHeaders: [ETag]
+            MaxAge: 3600
+
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Bucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt Bucket.Arn
+              - !Sub "${Bucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  # ---------------------------------------------------------------- function
+  FunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 14
+
+  Function:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      Architectures: [x86_64]
+      MemorySize: 3008
+      Timeout: 300
+      EphemeralStorage:
+        Size: 1024
+      ReservedConcurrentExecutions: !If [HasReservedConcurrency, !Ref ReservedConcurrency, !Ref "AWS::NoValue"]
+      LoggingConfig:
+        LogGroup: !Ref FunctionLogGroup
+      Environment:
+        Variables:
+          STITCHPILOT_MODE: lambda
+          STITCHPILOT_BUCKET: !Ref Bucket
+          STITCHPILOT_ALLOWED_ORIGIN: !Ref AllowedOrigin
+          QT_QPA_PLATFORM: offscreen
+          HOME: /tmp
+          XDG_CACHE_HOME: /tmp/.cache
+          XDG_RUNTIME_DIR: /tmp
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Sid: ObjectAccess
+              Effect: Allow
+              Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+              Resource: !Sub "${Bucket.Arn}/*"
+            - Sid: ListBucket
+              Effect: Allow
+              Action: s3:ListBucket
+              Resource: !GetAtt Bucket.Arn
+      FunctionUrlConfig:
+        AuthType: NONE
+        InvokeMode: BUFFERED
+        Cors:
+          AllowOrigins: [!Ref AllowedOrigin]
+          AllowMethods: [GET, POST]
+          AllowHeaders: [content-type, x-claude-key]
+          MaxAge: 3600
+    Metadata:
+      # `sam build --template-file deploy/aws/template.yaml` builds the image from the repository root
+      Dockerfile: Dockerfile.lambda
+      DockerContext: ../..
+      DockerTag: stitchpilot-lambda
+
+  # Since late 2025 a public (AuthType NONE) Function URL needs lambda:InvokeFunction as well as
+  # lambda:InvokeFunctionUrl. SAM adds the second one for the URL; this makes the first one explicit.
+  FunctionUrlInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref Function
+      Action: lambda:InvokeFunction
+      Principal: "*"
+      InvokedViaFunctionUrl: true
+
+Outputs:
+  FunctionUrl:
+    Description: The API address. Give it to deploy/aws/build_site.py as --api-url (drop the trailing slash).
+    Value: !GetAtt FunctionUrl.FunctionUrl
+  BucketName:
+    Description: Name of the S3 bucket. Give it to build_site.py as --bucket.
+    Value: !Ref Bucket
+  BucketRegionalDomain:
+    Description: Regional domain name of the bucket (the browser uploads here).
+    Value: !GetAtt Bucket.RegionalDomainName
+  Region:
+    Description: AWS region of the stack. Give it to build_site.py as --region.
+    Value: !Ref "AWS::Region"
