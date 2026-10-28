@@ -109,6 +109,11 @@ v.centerOn(QPointF(*((pt - v.origin) * v.ppm)))
 app.processEvents()
 corner = min((pt + (dx, dy) for dx in (-3, 3) for dy in (-3, 3)),
              key=lambda c: -np.hypot(*(v.pts - c).T).min())
+gap = np.hypot(*(v.pts - corner).T).min()
+while v.PICK_PX / (v.transform().m11() * v.ppm) > 0.8 * gap:  # zoomed in enough that the corner isn't on a point
+    v.scale(2, 2)  # (the window's layout, and so the starting zoom, differs between Windows and macOS)
+v.centerOn(QPointF(*((pt - v.origin) * v.ppm)))
+app.processEvents()
 a, b = vpos(corner), vpos(2 * pt - corner)
 QTest.mousePress(v.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, a)
 QTest.mouseMove(v.viewport(), b)

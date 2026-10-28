@@ -84,6 +84,7 @@ expect_error(updates.check, "aren't set up")
 updates.UPDATE_URL, updates.PUBLIC_KEY = f"{base}/latest.json", pub
 
 # ---- a newer signed release is offered, with its download checked against what was signed
+updates.platform_key = lambda: "windows"  # these releases only have a Windows exe (the tests run on Macs too)
 nv = "99.0.0"
 doc = publish(nv)
 rel = updates.check()

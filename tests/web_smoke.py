@@ -130,7 +130,8 @@ def main():
     print(f"hearts + appliqué + lettering: {r3['stitches']} stitches, {r3['colours']} colours, {r3['stops']} stops")
     assert r3["stops"] == 2 and r3["applique_pieces"] == 1 and r3["colours"] == 5
     found = [t for t in r3["threads"] if t["kinds"].get("satin", 0) >= 3]
-    assert len(found) >= 2, "lettering and the monogram frame sew as satin"
+    assert len(found) >= 2, ("lettering and the monogram frame sew as satin",
+                             [(t["rgb"], t["kinds"]) for t in r3["threads"]])
     sh3 = shape_at(r3["shape_list"], *star["centre"])
     assert sh3["pattern"] == "hearts" and sh3["angle"] is None and sh3["edit"]["pattern"] == "hearts", sh3
 
