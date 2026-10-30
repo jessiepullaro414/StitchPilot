@@ -1,12 +1,11 @@
 """Complexity badge, problem map, compare view, Simplicity slider and 'Make it embroidery-friendly'."""
-import os
 import sys
 from pathlib import Path
 
 import _testenv  # noqa: F401  (offscreen Qt, throwaway settings)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from PySide6.QtCore import QEventLoop, QSettings, QTimer  # noqa: E402
+from PySide6.QtCore import QEventLoop, QTimer  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 from stitchpilot import gui  # noqa: E402

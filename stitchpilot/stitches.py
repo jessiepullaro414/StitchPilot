@@ -408,26 +408,36 @@ def _chunk_ends(ch, rev_rows: bool, first_rev: bool):
     return np.array([b0 if first_rev else a0, y0]), np.array([a1 if last_rev else b1, y1])
 
 
-def _plan_chunks(chunks, pos, first=None):
-    """Greedy order: always the nearest chunk start next. Returns ([(ci, rev_rows, first_rev)], end)."""
-    left = list(range(len(chunks)))
+def _all_chunk_ends(chunks):
+    """Start and end points of every chunk for each way of sewing it: two (n, 4, 2) arrays, way = 2*rev_rows + first_rev."""
+    starts, ends = np.empty((len(chunks), 4, 2)), np.empty((len(chunks), 4, 2))
+    for ci, ch in enumerate(chunks):
+        for w in range(4):
+            starts[ci, w], ends[ci, w] = _chunk_ends(ch, w >= 2, w % 2 == 1)
+    return starts, ends
+
+
+def _plan_chunks(chunks, pos, first=None, ends=None):
+    """Greedy order: always the nearest chunk start next. Returns ([(ci, rev_rows, first_rev)], end).
+    ends: _all_chunk_ends(chunks), when planning the same chunks several times."""
+    starts, finish = ends if ends is not None else _all_chunk_ends(chunks)
+    left = np.ones(len(chunks), bool)
     plan = []
-    while left:
+    for _ in range(len(chunks)):
         if first is not None:
-            choice, first = first, None
+            (ci, rr, fr), first = first, None
+            w = 2 * rr + fr
         else:
-            best = None
-            for ci in left:
-                for rr in (False, True):
-                    for fr in (False, True):
-                        p0, _ = _chunk_ends(chunks[ci], rr, fr)
-                        d = 0.0 if pos is None else float(np.hypot(*(p0 - pos)))
-                        if best is None or d < best[0]:
-                            best = (d, (ci, rr, fr))
-            choice = best[1]
-        left.remove(choice[0])
-        plan.append(choice)
-        pos = _chunk_ends(chunks[choice[0]], choice[1], choice[2])[1]
+            idx = np.flatnonzero(left)
+            if pos is None:
+                ci, w = int(idx[0]), 0
+            else:
+                diff = starts[idx] - pos
+                j = int(np.argmin(np.hypot(diff[..., 0], diff[..., 1])))  # first of equals, as before
+                ci, w = int(idx[j // 4]), j % 4
+        left[ci] = False
+        plan.append((ci, w >= 2, w % 2 == 1))
+        pos = finish[ci, w]
     return plan, pos
 
 
@@ -448,7 +458,8 @@ def fill_runs(poly: Polygon, angle_deg: float, spacing: float, stitch_len: float
         chunks = _chunks(_scan_rows(pr, spacing), 0.15)
         if not chunks:
             continue
-        plan, _ = _plan_chunks(chunks, pos)
+        ends = _all_chunk_ends(chunks)
+        plan, _ = _plan_chunks(chunks, pos, ends=ends)
         if goal is not None and pi == len(parts) - 1:
             # try other first moves; extra distance at the start costs as much as at the end
             def cost(cand):
@@ -456,9 +467,9 @@ def fill_runs(poly: Polygon, angle_deg: float, spacing: float, stitch_len: float
                 p0 = _chunk_ends(chunks[ci], rr, fr)[0]
                 return (0.0 if pos is None else float(np.hypot(*(p0 - pos)))) + float(np.hypot(*(finish - goal)))
 
-            cands = [_plan_chunks(chunks, pos, (ci, rr, fr))
+            cands = [_plan_chunks(chunks, pos, (ci, rr, fr), ends)
                      for ci in range(min(len(chunks), 12)) for rr in (False, True) for fr in (False, True)]
-            plan = min(cands + [_plan_chunks(chunks, pos)], key=cost)[0]
+            plan = min(cands + [_plan_chunks(chunks, pos, ends=ends)], key=cost)[0]
         for ci, rev_rows, first_rev in plan:
             rows = chunks[ci][::-1] if rev_rows else chunks[ci]
             for i, (k, y, xa, xb) in enumerate(rows):

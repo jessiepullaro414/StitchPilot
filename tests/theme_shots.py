@@ -1,12 +1,11 @@
 """Screenshots of every theme (empty window and with a design), and a readability check of its colours."""
-import os
 import sys
 from pathlib import Path
 
 import _testenv  # noqa: F401  (offscreen Qt, throwaway settings)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from PySide6.QtCore import QEventLoop, QSettings, QTimer  # noqa: E402
+from PySide6.QtCore import QEventLoop, QTimer  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from stitchpilot import gui, theme  # noqa: E402

@@ -38,7 +38,7 @@ def write_svg(design: Design, path: str | Path) -> Path:
     if not parts:
         raise ValueError("This design has no appliqué pieces.")
     mn, w, h = _frame(parts)
-    out = [f'<?xml version="1.0" encoding="UTF-8"?>',
+    out = ['<?xml version="1.0" encoding="UTF-8"?>',
            f'<svg xmlns="http://www.w3.org/2000/svg" width="{w:.2f}mm" height="{h:.2f}mm" '
            f'viewBox="0 0 {w:.3f} {h:.3f}">',
            "<!-- StitchPilot appliqué pieces, real size. One group per fabric. -->"]

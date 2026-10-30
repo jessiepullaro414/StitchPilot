@@ -1,12 +1,11 @@
 """Mac-specific code paths that can be exercised anywhere: Finder/Dock file-open events, trackpad scrolling."""
-import os
 import sys
 from pathlib import Path
 
 import _testenv  # noqa: F401  (offscreen Qt, throwaway settings)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from PySide6.QtCore import QPoint, QPointF, QSettings, Qt  # noqa: E402
+from PySide6.QtCore import QPoint, QPointF, Qt  # noqa: E402
 from PySide6.QtGui import QFileOpenEvent, QWheelEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 

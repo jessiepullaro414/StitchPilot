@@ -5,6 +5,7 @@ known resolution in pixels per millimetre, ready for region extraction.
 """
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, replace
 from typing import Callable
 
@@ -328,6 +329,15 @@ def _crop_to(rgba: np.ndarray, mask: np.ndarray) -> np.ndarray | None:
 
 def _fit(wpx: int, hpx: int, s: Settings) -> float:
     return min(s.max_width_mm / wpx, s.max_height_mm / hpx)
+
+
+def inputs(s: Settings) -> tuple:
+    """Every setting prepare() reads (directly or through foreground_mask, quantize and lettering). While these
+    stay the same, the last Prepared can be reused: stitch settings alone don't need the picture worked out again.
+    A copy, so later edits to the settings' lists can't change it."""
+    return copy.deepcopy((s.background, s.background_rgb, s.remove_enclosed_bg, s.max_width_mm, s.max_height_mm,
+                          s.rotate, s.mirror, s.detail, s.smooth, s.num_colors, s.palette, s.merge_de,
+                          s.min_region_mm2, s.thin_lines, s.texts, s.text_fixes))
 
 
 def prepare(rgba: np.ndarray | None, s: Settings, progress: Progress | None = None,

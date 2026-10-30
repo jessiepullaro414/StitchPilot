@@ -15,7 +15,6 @@ from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox  # noqa: E402
 
 from stitchpilot import ai, gui  # noqa: E402
-from stitchpilot import stitches as st  # noqa: E402
 
 here = Path(__file__).parent
 out = here / "out"

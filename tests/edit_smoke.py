@@ -1,5 +1,4 @@
 """Drive the stitch editor with real mouse/keyboard events (offscreen)."""
-import os
 import sys
 from pathlib import Path
 
@@ -8,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np  # noqa: E402
 import pyembroidery as pe  # noqa: E402
-from PySide6.QtCore import QEventLoop, QPoint, QPointF, QSettings, Qt, QTimer  # noqa: E402
+from PySide6.QtCore import QEventLoop, QPoint, QPointF, Qt, QTimer  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 

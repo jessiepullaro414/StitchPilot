@@ -201,11 +201,11 @@ def main():
         client = real(api_key="test", http_client=httpx.Client(transport=httpx.MockTransport(handler)))
         return lambda *a, **k: client  # stands in for anthropic.Anthropic(...)
 
-    ai.anthropic.Anthropic = reply({"summary": "Rows along the star.", "suggestions": [
+    anthropic.Anthropic = reply({"summary": "Rows along the star.", "suggestions": [
         {"shape": 1, "stitch": "satin", "angle": None, "reason": "A smooth ring."}]})
     status, sug, _ = call("/api/ai/shapes", {"image_id": up["image_id"], "state": state}, {"X-Claude-Key": "sk-test"})
     assert status == 200 and sug["suggestions"][0]["stitch"] == "satin" and "fx" in sug["suggestions"][0], sug
-    ai.anthropic.Anthropic = reply({
+    anthropic.Anthropic = reply({
         "subject": "A star badge", "design_type": "logo", "background": "plain", "background_hex": "#ffffff",
         "background_inside_is_background": True, "detail": 0.6, "min_width_mm": 40, "suitability": "great",
         "thread_colors": [{"hex": "#143c8c", "name": "Blue", "role": "main"}, {"hex": "#fac828", "name": "Gold", "role": "main"},
@@ -213,11 +213,11 @@ def main():
     jobs.init_worker()
     got = jobs.ai_settings((here / "samples" / "logo.jpg").read_bytes(), "logo.jpg", state, "sk-test")
     assert got["changes"]["colors"] == "ai" and len(got["changes"]["ai_palette"]) == 3 and got["subject"]
-    ai.anthropic.Anthropic = reply(lambda body: {"texts": [
+    anthropic.Anthropic = reply(lambda body: {"texts": [
         {"text": "STITCH", "left": 290, "top": 662, "right": 520, "bottom": 716, "style": "sans", "bold": True,
          "italic": False, "font_guess": "", "curved": False}]})
     rows = jobs.ai_text((here / "samples" / "logo.jpg").read_bytes(), "logo.jpg", "sk-test")
-    ai.anthropic.Anthropic = real
+    anthropic.Anthropic = real
     assert rows[0]["fix"] and rows[0]["score"] > 0.5, rows
     print("AI routes ok:", sug["suggestions"][0]["stitch"], "|", got["subject"], "|", rows[0]["fix"]["font"],
           f"{rows[0]['score']:.0%}")

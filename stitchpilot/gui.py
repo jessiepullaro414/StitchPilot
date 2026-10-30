@@ -26,8 +26,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
-    QGraphicsPixmapItem, QGraphicsScene, QGraphicsView, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
-    QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox,
+    QGraphicsPixmapItem, QGraphicsScene, QGraphicsView, QHBoxLayout, QLabel, QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox,
     QSplitter, QTabWidget, QTextBrowser, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -47,6 +46,7 @@ from .dialogs import (
 from .digitize import ColorBlock, Design, Shape, digitize
 from .export import DEFAULT_FORMAT, FORMATS, READ_EXTS, THREAD_CHARTS, export, match_threads, read_design
 from .imageio import SUPPORTED_EXTS, load_image
+from .prep import inputs as prep_inputs
 from .prep import rgb_to_lab
 from .render import FABRIC, layout, render
 from .settings import DEFAULT_FABRIC, DEFAULT_HOOP, FABRICS, HOOPS, Settings, ShapeEdit, TextFix, TextItem
@@ -687,6 +687,9 @@ class MainWindow(QMainWindow):
         self._baked: set[int] = set()  # id()s of erase Ops the current conversion already cut out
         self._baking: set[int] = set()  # and those of the conversion running now
         self.source_cx = self.result_cx = self.source_key = None  # picture / current-result complexity
+        # (picture, prep_inputs, Prepared, its complexity) of the last conversion: reused while only stitch settings
+        # change, which skips finding the design and picking colours again (about half of a conversion)
+        self._prep: tuple | None = None
         self.undo_stack: list = []
         self.redo_stack: list = []
         self.shape_edits: list[ShapeEdit] = []  # per-shape changes (stitch type, angle, density, order)
@@ -1891,7 +1894,7 @@ class MainWindow(QMainWindow):
         self.ai_lbl.hide()
         self.file_info.hide()
         self._forget_edits()
-        self.source_cx = self.result_cx = self.source_key = None
+        self.source_cx = self.result_cx = self.source_key = self._prep = None
         self.show_complexity()
         self._clear_design()
         self.v_orig.set_image(to_qimage(rgba) if rgba is not None else None)
@@ -2260,12 +2263,14 @@ class MainWindow(QMainWindow):
         key = (id(rgba), s.background, s.background_rgb, s.remove_enclosed_bg, s.max_width_mm, s.max_height_mm,
                s.rotate, s.mirror, tuple(astuple(t) for t in s.texts), tuple(astuple(f) for f in s.text_fixes))
         need_source = key != self.source_key
+        pkey = (rgba, prep_inputs(s))
+        reuse = self._prep if self._prep is not None and self._prep[0] is rgba and self._prep[1] == pkey[1] else None
 
         def run(p):
-            d = digitize(rgba, s, p)
+            d = digitize(rgba, s, p, reuse[2] if reuse else None)
             p(0.99, "Checking how complex it is…")
             src = analyse_source(rgba, s) if need_source else None
-            return "design", (d, src, analyse_cx(d.prepared), key)
+            return "design", (d, src, reuse[3] if reuse else analyse_cx(d.prepared), key, pkey)
 
         self.progress.setRange(0, 100)
         self.progress.show()
@@ -2299,10 +2304,11 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, APP, msg)
             QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
         else:
-            d, src, res, key = val
+            d, src, res, key, pkey = val
             if src is not None:
                 self.source_cx, self.source_key = src, key
             self.result_cx = res
+            self._prep = (*pkey, d.prepared, res)
             self.base = d
             self._baked = self._baking
             if self._restore_blocks is not None:  # a project with hand edits: put them back

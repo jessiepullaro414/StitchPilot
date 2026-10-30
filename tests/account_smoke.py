@@ -18,7 +18,6 @@ here = Path(__file__).parent
 sys.path.insert(0, str(here.parent))
 sys.path.insert(0, str(here.parent / "gateway"))
 
-import numpy as np  # noqa: E402
 from PIL import Image  # noqa: E402
 from PySide6.QtCore import QEventLoop, QTimer  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402

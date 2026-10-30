@@ -5,15 +5,17 @@ import base64
 import io
 import os
 from dataclasses import replace
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
-import anthropic
 import numpy as np
 from PIL import Image
 from pydantic import BaseModel
 
 from . import account
 from .settings import Settings
+
+if TYPE_CHECKING:  # the SDK takes seconds to import, so it's loaded on first use instead of at start-up
+    import anthropic
 
 MODEL = "claude-opus-5-5"
 
@@ -93,6 +95,8 @@ def has_credentials(api_key: str | None) -> bool:
 def _ask(system: str, data: str, prompt: str, output_format, api_key: str | None,
          client: anthropic.Anthropic | None):
     """One image + text request with structured output; friendly errors."""
+    import anthropic
+
     try:
         client = client or anthropic.Anthropic(api_key=api_key or None, max_retries=2, timeout=120)
         resp = client.beta.messages.parse(
@@ -124,6 +128,8 @@ def _via_gateway(client) -> bool:
 
 def _friendly(e: Exception, client) -> Exception:
     """An error message people can act on (and, through the AI service, the account's own problems)."""
+    import anthropic
+
     status = getattr(e, "status_code", None)
     if _via_gateway(client) and isinstance(e, anthropic.APIStatusError):
         problem = account.gateway_error(status, getattr(e, "body", None))

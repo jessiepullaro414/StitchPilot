@@ -1,16 +1,17 @@
 """Open the GUI offscreen, exercise every feature and save screenshots."""
-import os
 import sys
 from pathlib import Path
 
 import _testenv  # noqa: F401  (offscreen Qt, throwaway settings)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from PySide6.QtCore import QEventLoop, QSettings, QTimer  # noqa: E402
+import numpy as np  # noqa: E402
+from PySide6.QtCore import QEventLoop, QTimer  # noqa: E402
 from PySide6.QtGui import QColor, QDesktopServices, QPalette  # noqa: E402
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox  # noqa: E402
 
 from stitchpilot import gui  # noqa: E402
+from stitchpilot.digitize import digitize  # noqa: E402
 from stitchpilot.settings import TextItem  # noqa: E402
 
 here = Path(__file__).parent
@@ -112,6 +113,22 @@ print("lettering only:", f"{w.design.width_mm:.0f}x{w.design.height_mm:.0f}mm", 
 assert w.design.trim_count == 0
 shot("lettering")
 w.trims.setChecked(True)
+
+# stitch settings reuse the worked-out picture (and give exactly what a fresh conversion gives); picture
+# settings don't
+w.open_path(str(here / "samples" / "badge.png"))
+wait_idle()
+prep0 = w.design.prepared
+w.sp_fill.setValue(w.sp_fill.value() + 0.06)
+wait_idle()
+assert w.design.prepared is prep0, "fill spacing re-worked the picture"
+fresh = digitize(w.rgba, w.settings())
+assert len(fresh.blocks) == len(w.base.blocks) and all(
+    np.array_equal(a.cmds, b.cmds) for a, b in zip(fresh.blocks, w.base.blocks, strict=True)), "reused != fresh"
+w.sp_merge.setValue(w.sp_merge.value() + 3)
+wait_idle()
+assert w.design.prepared is not prep0, "a picture setting must work the picture out again"
+print("stitch settings reuse the prepared picture")
 
 # open an existing embroidery file and convert it
 w.open_path(str(out / "logo.pes"))
