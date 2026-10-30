@@ -111,9 +111,9 @@ def skeleton_paths(mask: np.ndarray, dt: np.ndarray) -> list[tuple[np.ndarray, b
 
     def link(m: np.ndarray, dy: int, dx: int):
         yy, xx = np.nonzero(m)
-        for a, b in zip(idx[yy, xx], idx[yy + dy, xx + dx]):
-            adj[a].append(int(b))
-            adj[b].append(int(a))
+        for a, b in zip(idx[yy, xx].tolist(), idx[yy + dy, xx + dx].tolist()):
+            adj[a].append(b)
+            adj[b].append(a)
 
     c = S[:-1, :-1]
     link(S[:-1, :-1] & S[:-1, 1:], 0, 1)
@@ -123,25 +123,25 @@ def skeleton_paths(mask: np.ndarray, dt: np.ndarray) -> list[tuple[np.ndarray, b
     sub = S[:-1, 1:]
     m = sub & S[1:, :-1] & ~S[:-1, :-1] & ~S[1:, 1:]
     yy, xx = np.nonzero(m)
-    for a, b in zip(idx[yy, xx + 1], idx[yy + 1, xx]):
-        adj[a].append(int(b))
-        adj[b].append(int(a))
+    for a, b in zip(idx[yy, xx + 1].tolist(), idx[yy + 1, xx].tolist()):
+        adj[a].append(b)
+        adj[b].append(a)
 
-    deg = np.array([len(a) for a in adj])
+    deg = [len(a) for a in adj]  # a list: walked one pixel at a time, numpy indexing would be slow here
     seen: set[tuple[int, int]] = set()
     raw: list[list[int]] = []
 
     def key(a, b):
         return (a, b) if a < b else (b, a)
 
-    for s in np.nonzero(deg != 2)[0]:
+    for s in [i for i, k in enumerate(deg) if k != 2]:
         if deg[s] == 0:
-            raw.append([int(s)])
+            raw.append([s])
         for nb in adj[s]:
             if key(s, nb) in seen:
                 continue
             seen.add(key(s, nb))
-            path, prev, cur = [int(s), nb], int(s), nb
+            path, prev, cur = [s, nb], s, nb
             while deg[cur] == 2:
                 nxt = adj[cur][0] if adj[cur][0] != prev else adj[cur][1]
                 if key(cur, nxt) in seen:
@@ -151,7 +151,7 @@ def skeleton_paths(mask: np.ndarray, dt: np.ndarray) -> list[tuple[np.ndarray, b
                 prev, cur = cur, nxt
             raw.append(path)
     for s in range(n):  # pure loops
-        if deg[s] == 2 and any(key(s, nb) not in seen for nb in adj[s]):
+        if deg[s] == 2 and (key(s, adj[s][0]) not in seen or key(s, adj[s][1]) not in seen):
             path, prev, cur = [s], s, adj[s][0]
             seen.add(key(s, cur))
             while cur != s:

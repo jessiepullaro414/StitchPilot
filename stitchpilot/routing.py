@@ -63,6 +63,8 @@ class Router:
         self.ok = cv2.erode(ok, np.ones((3, 3), np.uint8)).astype(bool)
         # cells within half a millimetre of the edge of the coverable area
         self.edge = self.ok & ~cv2.erode(self.ok.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
+        # travel cost of each cell before any stitching, -1 = can't go there (route() cuts a window out of this)
+        self.base = np.where(self.ok, self.lut[cm.rid + 1], -1.0)
         lat = (later[cm.rid] & (cm.rid >= 0)).astype(np.uint8)
         lat = cv2.erode(lat, np.ones((3, 3), np.uint8))
         _, self.comp = cv2.connectedComponents(lat, connectivity=8)
@@ -135,7 +137,7 @@ class Router:
         y1 = min(H, int(max(ga[1], gb[1])) + margin + 1)
         if x1 - x0 < 2 or y1 - y0 < 2:
             return None
-        cost = np.where(self.ok[y0:y1, x0:x1], self.lut[rid[y0:y1, x0:x1] + 1], np.inf)
+        cost = self.base[y0:y1, x0:x1].copy()
         done = self.done[y0:y1, x0:x1] > 0
         edge = self.edge[y0:y1, x0:x1]
         cost[done & ~edge] = SEWN
@@ -144,7 +146,7 @@ class Router:
         sb = self._snap(cost, gb - (x0, y0))
         if sa is None or sb is None:
             return None
-        m = MCP_Geometric(np.where(np.isfinite(cost), cost, -1), fully_connected=True)
+        m = MCP_Geometric(cost, fully_connected=True)
         cum, _ = m.find_costs([sa], [sb])
         if not np.isfinite(cum[sb]) or cum[sb] < 0:
             return None
@@ -167,7 +169,7 @@ class Router:
         r = int(math.ceil(SNAP * GRID))
         cy, cx = int(g[1]), int(g[0])
         y0, x0 = max(0, cy - r), max(0, cx - r)
-        win = np.isfinite(cost[y0:cy + r + 1, x0:cx + r + 1])
+        win = cost[y0:cy + r + 1, x0:cx + r + 1] >= 0
         ys, xs = np.nonzero(win)
         if not len(ys):
             return None

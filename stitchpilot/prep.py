@@ -63,6 +63,15 @@ def _nearest(lab_px: np.ndarray, centers: np.ndarray, chunk: int = 400_000) -> t
     return idx, dist
 
 
+def _nearest_per_colour(rgb: np.ndarray, lab: np.ndarray, centers: np.ndarray) -> np.ndarray:
+    """_nearest's index for every pixel of an image, worked out once per distinct colour: a picture has far fewer
+    colours than pixels (a smoothed photo ~1 in 6, a logo ~1 in 800), and same colour = same Lab = same answer."""
+    key = ((rgb[..., 0].astype(np.int32) << 16) | (rgb[..., 1].astype(np.int32) << 8) | rgb[..., 2]).ravel()
+    _, first, inverse = np.unique(key, return_index=True, return_inverse=True)
+    idx, _ = _nearest(lab.reshape(-1, 3)[first], centers)
+    return idx[inverse]
+
+
 # ---------------------------------------------------------------- background
 def _border_pixels(img: np.ndarray, t: int = 3) -> np.ndarray:
     return np.concatenate([img[:t].reshape(-1, img.shape[-1]), img[-t:].reshape(-1, img.shape[-1]),
@@ -238,10 +247,12 @@ def mode_filter(labels: np.ndarray, n_classes: int, radius: int) -> np.ndarray:
     best = np.full(labels.shape, -1.0, np.float32)
     out = labels.copy()
     for c in range(n_classes):
-        score = cv2.blur((labels == c).astype(np.float32), (k, k))
-        score += (labels == c) * 1e-3  # ties keep the original label
+        here = (labels == c).astype(np.float32)
+        score = cv2.blur(here, (k, k))
+        score += here * np.float32(1e-3)  # ties keep the original label
         upd = score > best
-        best[upd], out[upd] = score[upd], c
+        np.copyto(best, score, where=upd)
+        np.copyto(out, c, where=upd, casting="unsafe")
     return out
 
 
@@ -409,7 +420,7 @@ def prepare(rgba: np.ndarray | None, s: Settings, progress: Progress | None = No
     prog(0.22, "Picking thread colours…")
     lab = rgb_to_lab(rgb)
     centers = quantize(lab, m, s)
-    idx, _ = _nearest(lab.reshape(-1, 3), centers)
+    idx = _nearest_per_colour(rgb, lab, centers)
     k = len(centers)
     labels = np.where(m.reshape(-1), idx, k).reshape(m.shape).astype(np.int16)  # k = empty
 
