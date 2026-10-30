@@ -5,6 +5,9 @@
 # only go out when you sign them on your own computer with build/publish_update.py (deploy/aws/UPDATES.md).
 # The signing key never comes near GitHub.
 #
+# Build check: Actions ▸ Release ▸ Run workflow builds everything the same way without a tag or a release;
+# the files are kept with the run for 14 days.
+#
 # Each file gets a build attestation: proof it was built by this workflow from this repo's code, which
 # you can check before signing:  gh attestation verify <file> -R jessiepullaro414/StitchPilot
 name: Release
@@ -12,6 +15,7 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions: {}
 
@@ -33,7 +37,7 @@ jobs:
         id: v
         run: |
           v=$(python3 -c 'import re; print(re.search(r"__version__\s*=\s*\"([^\"]+)\"", open("stitchpilot/__init__.py").read())[1])')
-          if [ "v$v" != "$GITHUB_REF_NAME" ]; then
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "v$v" != "$GITHUB_REF_NAME" ]; then
             echo "::error::Tag $GITHUB_REF_NAME doesn't match __version__ $v in stitchpilot/__init__.py"
             exit 1
           fi
@@ -75,6 +79,7 @@ jobs:
           name: windows
           path: dist/StitchPilot-${{ env.VERSION }}.exe
           if-no-files-found: error
+          retention-days: 14
 
   mac:
     needs: [version, test]
@@ -113,8 +118,10 @@ jobs:
           name: mac-${{ matrix.arch }}
           path: dist/StitchPilot-${{ env.VERSION }}-mac-${{ matrix.arch }}.zip
           if-no-files-found: error
+          retention-days: 14
 
   draft:
+    if: github.event_name == 'push'  # a build check stops before this
     needs: [version, windows, mac]
     runs-on: ubuntu-latest
     permissions:

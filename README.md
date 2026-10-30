@@ -160,6 +160,8 @@ releasing: [deploy/aws/UPDATES.md](deploy/aws/UPDATES.md) (`build/publish_update
 GitHub Actions runs the tests on Windows and macOS for every push and pull request (`.github/workflows/ci.yml`).
 Pushing a version tag (`git tag v0.2.0 && git push origin v0.2.0`) also builds the Windows exe and the Mac apps
 for Apple Silicon and Intel. They're attached to a draft GitHub release (`.github/workflows/release.yml`).
+To try the builds without releasing anything, use **Actions ▸ Release ▸ Run workflow**. The files stay with the
+run for 14 days.
 Updates are still signed on your own computer, never on GitHub. Python packages and actions are pinned to
 exact versions, and Dependabot suggests updates each week. See [SECURITY.md](SECURITY.md).
 
