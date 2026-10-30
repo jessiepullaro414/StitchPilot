@@ -6,6 +6,8 @@
 # macOS asks once before opening it (right-click > Open). To ship it without that warning, set:
 #   SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"   Developer ID signing
 #   NOTARY_PROFILE="stitchpilot"   a notarytool keychain profile (xcrun notarytool store-credentials)
+#   NOTARY_KEYCHAIN=<path>          the keychain holding that profile, if not the login keychain (GitHub Actions)
+# build/SIGNING.md explains how to get the certificate and notary key.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -103,8 +105,19 @@ rm -f "$zip"
 ditto -c -k --keepParent "$app" "$zip"
 
 if [[ -n "${SIGN_IDENTITY:-}" && -n "${NOTARY_PROFILE:-}" ]]; then
-    xcrun notarytool submit "$zip" --keychain-profile "$NOTARY_PROFILE" --wait
+    # Apple checks the app and, if it's happy, issues a ticket that's stapled to it (works offline too)
+    notary=(--keychain-profile "$NOTARY_PROFILE")
+    [[ -n "${NOTARY_KEYCHAIN:-}" ]] && notary+=(--keychain "$NOTARY_KEYCHAIN")
+    result="$(xcrun notarytool submit "$zip" "${notary[@]}" --wait --output-format json)"
+    status="$("$py" -c 'import json, sys; print(json.load(sys.stdin).get("status", ""))' <<<"$result")"
+    if [[ "$status" != "Accepted" ]]; then
+        echo "Apple didn't notarize the app (status: ${status:-unknown}). Its report:" >&2
+        sub="$("$py" -c 'import json, sys; print(json.load(sys.stdin).get("id", ""))' <<<"$result")"
+        [[ -n "$sub" ]] && xcrun notarytool log "$sub" "${notary[@]}" >&2 || true
+        exit 1
+    fi
     xcrun stapler staple "$app"
+    spctl --assess --type execute -vv "$app"  # Gatekeeper's own verdict: what people's Macs will say
     rm -f "$zip"
     ditto -c -k --keepParent "$app" "$zip"
 fi

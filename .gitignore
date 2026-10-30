@@ -23,6 +23,8 @@ tests/out/
 *.pfx
 *.p8
 *.mobileprovision
+*.cer
+*.csr
 *update_signing_key*
 *.ini
 .claude/
