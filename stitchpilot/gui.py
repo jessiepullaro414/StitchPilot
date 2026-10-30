@@ -3296,7 +3296,9 @@ def selftest(src: str, dst: str) -> int:
                     + pat.motif_runs(box(0, 0, 30, 30), "hearts", 5.0, None))
         d.blocks[0].fabric = [np.array([[0, 0], [20, 0], [10, 15]], float)]
         cutfiles.write(d, dst + ".svg")
+        import anthropic  # noqa: F401  (packaged for AI assist, which imports it on first use)
         import openai  # noqa: F401  (packaged for "Create with AI")
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey  # noqa: F401  (updates)
 
         assert "embroidery" in imagegen.build_prompt("a frog")
         Path(dst + ".txt").write_text(f"ok {d.stitch_count} stitches {len(d.blocks)} colours, "

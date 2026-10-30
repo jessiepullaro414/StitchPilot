@@ -37,16 +37,17 @@ excludes=(--exclude-module tkinter --exclude-module matplotlib --exclude-module 
 for m in "${qt_skip[@]}"; do excludes+=(--exclude-module "PySide6.$m"); done
 
 rm -rf dist/StitchPilot.app
+# full paths: PyInstaller reads relative ones from the --specpath folder, not from here
 "$py" -m PyInstaller --noconfirm --clean --windowed --name StitchPilot \
     --osx-bundle-identifier app.stitchpilot.StitchPilot \
-    --icon stitchpilot/icon.png \
-    --add-data "stitchpilot/icon.png:stitchpilot" \
+    --icon "$root/stitchpilot/icon.png" \
+    --add-data "$root/stitchpilot/icon.png:stitchpilot" \
     --collect-data pyembroidery \
     --collect-submodules skimage.morphology \
     --collect-submodules skimage.graph \
     --hidden-import pillow_heif \
-    --workpath "$work/work" --specpath "$work" --distpath dist \
-    "${excludes[@]}" app.py
+    --workpath "$work/work" --specpath "$work" --distpath "$root/dist" \
+    "${excludes[@]}" "$root/app.py"
 
 app="dist/StitchPilot.app"
 plist="$app/Contents/Info.plist"
@@ -85,12 +86,16 @@ else
 fi
 codesign --verify --deep --strict "$app"
 
-# headless self-test of the packaged app: picture in, embroidery file out
+# headless self-test of the packaged app: picture in, embroidery file out (a broken app isn't zipped)
 if [[ -f tests/samples/badge.png ]]; then
     out="$work/selftest.pes"
     rm -f "$out" "$out.txt"
-    "$app/Contents/MacOS/StitchPilot" --selftest "$root/tests/samples/badge.png" "$out" || true
-    cat "$out.txt" 2>/dev/null || echo "self-test produced no report" >&2
+    if ! "$app/Contents/MacOS/StitchPilot" --selftest "$root/tests/samples/badge.png" "$out"; then
+        cat "$out.txt" >&2 2>/dev/null || echo "self-test produced no report" >&2
+        echo "The packaged app failed its self-test" >&2
+        exit 1
+    fi
+    cat "$out.txt"
 fi
 
 zip="dist/StitchPilot-mac-$arch.zip"

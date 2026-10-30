@@ -71,6 +71,14 @@ jobs:
         run: |
           ./build/build_exe.ps1
           Move-Item dist/StitchPilot.exe "dist/StitchPilot-$env:VERSION.exe"
+      - name: Self-test the exe (picture in, embroidery file out)
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP "selftest.pes"
+          $p = Start-Process "dist/StitchPilot-$env:VERSION.exe" -Wait -PassThru `
+            -ArgumentList "--selftest", (Resolve-Path tests/samples/badge.png), $out
+          Get-Content "$out.txt" -ErrorAction SilentlyContinue
+          if ($p.ExitCode -ne 0) { throw "The packaged exe failed its self-test" }
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
         with:
           subject-path: dist/StitchPilot-${{ env.VERSION }}.exe
@@ -84,6 +92,7 @@ jobs:
   mac:
     needs: [version, test]
     strategy:
+      fail-fast: false  # one Mac build failing shouldn't hide whether the other works
       matrix:
         include:
           - runner: macos-latest  # Apple Silicon
