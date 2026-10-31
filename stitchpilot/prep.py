@@ -12,6 +12,7 @@ from typing import Callable
 import cv2
 import numpy as np
 
+from .lettering import TEXT_GAP
 from .settings import Settings
 
 Progress = Callable[[float, str], None]
@@ -26,6 +27,7 @@ class Prepared:
     ppmm: float  # pixels per mm of the label map
     size_mm: tuple[float, float]
     source_rgba: np.ndarray  # cropped original (for display)
+    lettering: np.ndarray | None = None  # HxW bool: the letters of added text (not text in the picture)
 
     def color_preview(self) -> np.ndarray:
         """RGBA image of the reduced-colour artwork."""
@@ -328,6 +330,29 @@ def fix_thin(labels: np.ndarray, empty: int, ppmm: float, mode: str) -> np.ndarr
     return lab
 
 
+def _resize_layer(where: np.ndarray, W: int, H: int) -> np.ndarray:
+    """lettering.compose's layer at the working size: each value scaled on its own, so thin strokes survive."""
+    if where.shape == (H, W):
+        return where
+    interp = cv2.INTER_AREA if W < where.shape[1] else cv2.INTER_LINEAR
+    out = np.zeros((H, W), np.uint8)
+    for v in sorted(np.unique(where), reverse=True):  # the gaps between letters first, letters on top
+        if v:
+            out[cv2.resize((where == v).astype(np.float32), (W, H), interpolation=interp) >= 0.5] = v
+    return out
+
+
+def _restore_lettering(labels: np.ndarray, where: np.ndarray, texts, centers: np.ndarray, empty: int) -> None:
+    """Put lettering back exactly as drawn. The clean-up above is for pictures: it rounds corners, closes
+    small holes (the eye of an e) and drops small specks (the dot of an i, a full stop)."""
+    labels[where == TEXT_GAP] = empty
+    for i, t in enumerate(texts):
+        on = where == i + 1
+        if on.any():
+            lab = rgb_to_lab(np.array(t.rgb, np.uint8).reshape(1, 1, 3)).reshape(3)
+            labels[on] = int(np.argmin(np.linalg.norm(centers - lab, axis=1)))
+
+
 # ---------------------------------------------------------------- main entry
 def _crop_to(rgba: np.ndarray, mask: np.ndarray) -> np.ndarray | None:
     ys, xs = np.nonzero(mask)
@@ -375,17 +400,18 @@ def prepare(rgba: np.ndarray | None, s: Settings, progress: Progress | None = No
         crop = _crop_to(rgba, mask)
     texts = [t for t in s.texts if t.text.strip()]
     text_only_mpp = None
+    where = None  # where the lettering is (lettering.compose)
     if texts:
         from .lettering import compose
 
         img = crop
         if img is None:  # lettering on its own keeps the requested letter height (unless it won't fit)
-            crop = compose(None, texts, 0.1)
+            crop, where = compose(None, texts, 0.1, layer=True)
             text_only_mpp = min(0.1, _fit(crop.shape[1], crop.shape[0], s))
         else:
             mpp = _fit(*img.shape[1::-1], s)
             for _ in range(3):  # text size depends on the final scale, which depends on the text
-                crop = compose(img, texts, mpp)
+                crop, where = compose(img, texts, mpp, layer=True)
                 mpp = _fit(crop.shape[1], crop.shape[0], s)
         if s.palette:
             s = replace(s, palette=list(s.palette) + [t.rgb for t in texts])
@@ -408,6 +434,8 @@ def prepare(rgba: np.ndarray | None, s: Settings, progress: Progress | None = No
     pad = 3
     rgb = cv2.copyMakeBorder(rgb, pad, pad, pad, pad, cv2.BORDER_REPLICATE)
     m = np.pad(m, pad)
+    if where is not None:
+        where = np.pad(_resize_layer(where, W, H), pad)
 
     # ---- edge-preserving smoothing (stronger for "bold")
     prog(0.12, "Smoothing…")
@@ -434,6 +462,8 @@ def prepare(rgba: np.ndarray | None, s: Settings, progress: Progress | None = No
         labels = fix_thin(labels, k, ppmm, s.thin_lines)
         labels = merge_small(labels, k + 1, min_px)
     labels = mode_filter(labels, k + 1, 1)
+    if where is not None:
+        _restore_lettering(labels, where, texts, centers, k)
     labels[labels == k] = -1
 
     # drop unused colours and renumber
@@ -442,4 +472,5 @@ def prepare(rgba: np.ndarray | None, s: Settings, progress: Progress | None = No
     remap[used] = np.arange(len(used))
     labels = np.where(labels >= 0, remap[np.clip(labels, 0, k)], -1).astype(np.int16)
     palette = [tuple(int(v) for v in c) for c in lab_to_rgb(centers[used].reshape(-1, 1, 3)).reshape(-1, 3)]
-    return Prepared(labels, palette, ppmm, (w_mm, h_mm), crop)
+    lettering = (where > 0) & (where != TEXT_GAP) if where is not None else None
+    return Prepared(labels, palette, ppmm, (w_mm, h_mm), crop, lettering)

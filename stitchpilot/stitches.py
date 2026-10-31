@@ -21,8 +21,12 @@ STITCH, JUMP, TRIM, COLOR_CHANGE, STOP = 0, 1, 2, 3, 4
 
 
 # ===================================================================== geometry
-def mask_to_polygons(mask: np.ndarray, ox: int, oy: int, ppmm: float, min_hole_mm2: float) -> list[Polygon]:
-    """Smooth vector outline (mm) of a binary mask crop whose top-left is (ox, oy) px."""
+def mask_to_polygons(mask: np.ndarray, ox: int, oy: int, ppmm: float, min_hole_mm2: float,
+                     bare: np.ndarray | None = None) -> list[Polygon]:
+    """Smooth vector outline (mm) of a binary mask crop whose top-left is (ox, oy) px.
+
+    Holes smaller than min_hole_mm2 are filled in (another colour sewn on top covers them), except holes
+    that are bare fabric where `bare` (same crop) is set: the eye of a small e must stay open."""
     contours, hier = cv2.findContours(mask.astype(np.uint8), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
     if hier is None:
         return []
@@ -43,7 +47,7 @@ def mask_to_polygons(mask: np.ndarray, ox: int, oy: int, ppmm: float, min_hole_m
         while j != -1:
             if len(contours[j]) >= 3:
                 h = Polygon(conv(contours[j]))
-                if h.is_valid and h.area >= min_hole_mm2:
+                if h.is_valid and (h.area >= min_hole_mm2 or bare is not None and _is_bare(contours[j], bare)):
                     holes.append(h.exterior.coords)
             j = hier[j][0]
         poly = Polygon(conv(c), holes)
@@ -51,6 +55,15 @@ def mask_to_polygons(mask: np.ndarray, ox: int, oy: int, ppmm: float, min_hole_m
         poly = poly.buffer(0.5 / ppmm, quad_segs=4).simplify(0.02)
         out.extend(_polys(poly))
     return out
+
+
+def _is_bare(contour: np.ndarray, bare: np.ndarray) -> bool:
+    """Whether a hole (a contour of the mask) is mostly bare fabric."""
+    inside = np.zeros(bare.shape, np.uint8)
+    cv2.drawContours(inside, [contour], -1, 1, -1)
+    inside &= ~cv2.drawContours(np.zeros_like(inside), [contour], -1, 1, 1).astype(bool)  # not the edge pixels
+    n = int(inside.sum())
+    return n > 0 and float(bare[inside > 0].mean()) > 0.5
 
 
 def _polys(g) -> list[Polygon]:
@@ -87,6 +100,36 @@ def resample(path: np.ndarray, step: float, closed: bool = False) -> np.ndarray:
     n = max(1, int(math.ceil(total / step)))
     t = np.linspace(0, total, n + 1)
     return np.column_stack([np.interp(t, cum, path[:, 0]), np.interp(t, cum, path[:, 1])])
+
+
+def follow(path: np.ndarray, max_step: float, closed: bool = False, tol: float = 0.04,
+           min_step: float = 0.5) -> np.ndarray:
+    """Stitch points along a path: up to max_step apart on straight stretches, closer on curves and at
+    corners, so no stitch strays more than tol (mm) from the line. Even spacing would cut small curves
+    (letters, little circles) into polygons."""
+    fine = resample(path, 0.05, closed)
+    n = len(fine)
+    if n < 3:
+        return fine
+    reach = max(2, int(max_step / 0.05))
+    out, i = [0], 0
+    while i < n - 1:
+        j = min(n - 1, i + reach)
+        if j < n - 1 and n - 1 - j < min_step / 0.05:  # don't leave a tiny last stitch
+            j = min(n - 1, i + max(int(min_step / 0.05), (n - 1 - i) // 2))
+        a = fine[i]
+        while j > i + 1:
+            d = fine[j] - a
+            ln = float(np.hypot(*d))
+            mid = fine[i + 1:j] - a
+            if ln < 1e-9 or float(np.abs(mid[:, 0] * d[1] - mid[:, 1] * d[0]).max()) / ln <= tol:
+                break
+            j = max(i + 1, min(j - 1, i + int(0.8 * (j - i))))
+        if j - i < min_step / 0.05 and n - 1 - i >= min_step / 0.05:  # tight corner: keep stitches sewable
+            j = i + int(min_step / 0.05)
+        out.append(j)
+        i = j
+    return fine[out]
 
 
 # ===================================================================== skeleton
@@ -500,6 +543,7 @@ def _ray_dist(P: np.ndarray, D: np.ndarray, e0: np.ndarray, e1: np.ndarray, tmax
 
 
 CORNER_DEG = 50.0  # a centreline turning more than this within about one stroke width is a corner
+SATIN_MIN_MM = 0.8  # narrowest satin column: thinner ones look like a run and sink into the fabric
 
 
 def _unit(v: np.ndarray) -> np.ndarray:
@@ -544,9 +588,10 @@ def find_corners(c: np.ndarray, closed: bool, w: int) -> list[int]:
 def _split_at_corners(c: np.ndarray, closed: bool, hw: np.ndarray, step: float, forced=()):
     """Cut a centreline at its sharp corners into columns that each end in a mitre.
 
-    Returns [(pts, is_extension, mitres, corner_hw)], where mitres are half-planes (P, n) to keep
-    ((x - P)·n >= 0). Near each corner the column is straightened and extended past the corner so
-    the outside of the corner gets covered; the mitre then cuts it off cleanly. No fan of stitches.
+    Returns [(pts, is_extension, mitres, corner_hw)], where mitres (P, n, end, span) are half-planes to keep
+    ((x - P)·n >= 0) over the span points at that end of the column. Near each corner the column is
+    straightened and extended past the corner so the outside of the corner gets covered; the mitre then cuts
+    it off cleanly. No fan of stitches.
     """
     # the window spans the rounded bit a skeleton makes at a corner (blunt letter tips bend twice)
     w = max(2, int(round(float(np.clip(1.6 * np.median(hw), 0.8, 4.0)) / step)))
@@ -594,14 +639,18 @@ def _split_at_corners(c: np.ndarray, closed: bool, hw: np.ndarray, step: float, 
             total = arc[-1]
             trim = min(w * step, 0.35 * total)
             cut = len(seg) - 1 - int(np.searchsorted(arc, trim))
+            # the mitre only cuts this end of the column (counted in points along it): the same line can
+            # cross the far side of a curving stroke (C, S, the eye of an e), which must be kept
+            span = int((trim + 2.0 * h) / step) + 1
             if cut >= 1:
                 u = u_in if end == "end" else -u_out
                 reach = trim + min(4.0 * h, 5.0)
                 more = seg[cut] + u * (np.arange(1, int(reach / step) + 1) * step)[:, None]
                 seg = np.vstack([seg[:cut + 1], more])
                 ext = np.concatenate([ext[:cut + 1], np.ones(len(more), bool)])
+                span = len(seg) - cut + int(2.0 * h / step)
             back = -u_in if end == "end" else u_out  # this column lies on the side of P - u_in / P + u_out
-            mitres.append((P, nm if float(back @ nm) >= 0 else -nm))
+            mitres.append((P, nm if float(back @ nm) >= 0 else -nm, end, span))
             chw.append(h)
             if end == "start":
                 seg, ext = seg[::-1], ext[::-1]
@@ -621,22 +670,25 @@ def _short_stitches(c, L, R, keep):
 
 
 def satin_runs(paths_mm, poly: Polygon, halfwidth, s, start: np.ndarray | None,
-               hints=None) -> list[np.ndarray]:
+               hints=None, report: dict | None = None) -> list[np.ndarray]:
     """Satin columns following centreline paths, with centre-walk + zigzag underlay.
 
     Sharp corners are split into two columns meeting at a mitre; tight inner curves get short stitches.
     paths_mm: list of (pts, closed) centrelines in mm; halfwidth(pts) -> local half widths.
     hints: per path, {"clips": [(point, normal, radius)], "corners": [point]} from join_through (mm).
+    report: if given, gets "fan_mm", how much of the satin fans out (a blob, better filled).
     """
     rings = _rings(poly)
     e0 = np.concatenate([r[:-1] for r in rings])
     e1 = np.concatenate([r[1:] for r in rings])
-    step = s.satin_spacing / 2.0
     max_half = s.satin_max_width / 2.0
     pc = s.pull_comp / 2.0
     pieces = []
     for pi, (pts, closed) in enumerate(paths_mm):
         hint = hints[pi] if hints else {}
+        # narrow columns sew a little more open (up to 25%): at full density thread piles up in them
+        width = 2 * float(np.median(halfwidth(resample(pts, 0.5, closed)))) + 2 * pc
+        step = s.satin_spacing / 2.0 * (1 + 0.25 * float(np.clip((1.6 - width) / 0.8, 0, 1)))
         c0 = resample(pts, step, closed)
         if len(c0) < 2:
             continue
@@ -665,22 +717,31 @@ def satin_runs(paths_mm, poly: Polygon, halfwidth, s, start: np.ndarray | None,
                         inside[i] = not gone
             dl = _ray_dist(c, nrm, e0, e1, cap)
             dr = _ray_dist(c, -nrm, e0, e1, cap)
+            short = np.maximum(0.0, SATIN_MIN_MM - 2 * pc - dl - dr) / 2  # widen hairlines evenly
+            dl, dr = dl + short, dr + short
             L = c + nrm * (dl + pc)[:, None]
             R = c - nrm * (dr + pc)[:, None]
             keep = inside.copy()
             plain = np.ones(len(c), bool)
-            clips = [(P, nm, None) for P, nm in mitres] + list(hint.get("clips", []))
-            for P, nm, radius in clips:
+            # each cut only applies near its corner (mitres) or junction (edge clips)
+            idx = np.arange(len(c))
+            clips = [(P, nm, idx < span if end == "start" else idx >= len(c) - span) for P, nm, end, span in mitres]
+            clips += [(P, nm, np.hypot(*(c - P).T) <= radius) for P, nm, radius in hint.get("clips", [])]
+            for P, nm, near in clips:
                 sl, sr = (L - P) @ nm, (R - P) @ nm
-                if radius is not None:  # an edge clip only matters near its junction
-                    far = np.hypot(*(c - P).T) > radius
-                    sl, sr = np.where(far, 1.0, sl), np.where(far, 1.0, sr)
+                sl, sr = np.where(near, sl, 1.0), np.where(near, sr, 1.0)
                 keep &= (sl >= 0) | (sr >= 0)
                 with np.errstate(divide="ignore", invalid="ignore"):
                     X = L + (R - L) * (sl / (sl - sr))[:, None]
                 fl, fr = (sl < 0) & (sr >= 0), (sr < 0) & (sl >= 0)
                 L[fl], R[fr] = X[fl], X[fr]
                 plain &= ~(fl | fr)
+            if report is not None:  # stitches fanning out from a point: the column is wider than its bend
+                dc = np.linalg.norm(np.diff(c, axis=0), axis=1)
+                inner = np.minimum(np.linalg.norm(np.diff(L, axis=0), axis=1),
+                                   np.linalg.norm(np.diff(R, axis=0), axis=1)) / np.maximum(dc, 1e-9)
+                fan = (inner < 0.25) & (hw[1:] > 0.6) & keep[1:] & ~ext[1:]
+                report["fan_mm"] = report.get("fan_mm", 0.0) + float(dc[fan].sum())
             if np.median(hw) > 1.0:
                 _short_stitches(c, L, R, plain & ~ext)
             # split where the centreline leaves the shape (or is cut away by a mitre)
@@ -706,7 +767,7 @@ def satin_runs(paths_mm, poly: Polygon, halfwidth, s, start: np.ndarray | None,
         if s.underlay:
             seq.append(resample(c, 1.8))  # centre walk out
             if np.median(hw) > 1.2:  # zigzag underlay back
-                zi = np.arange(len(c) - 1, -1, -1)[:: max(1, int(round(1.0 / step)))]
+                zi = np.arange(len(c) - 1, -1, -1)[:: max(1, int(round(2.0 / s.satin_spacing)))]  # ~1 mm apart
                 ins = 0.55
                 zl = c[zi] + (L[zi] - c[zi]) * ins
                 zr = c[zi] + (R[zi] - c[zi]) * ins
@@ -743,7 +804,7 @@ def bean_runs(paths_mm, stitch_len: float, start: np.ndarray | None, triple: boo
             lines.append(np.vstack([pts, pts + (0.3, 0)]))
             continue
         sm = gaussian_filter1d(pts, 1.5, axis=0, mode="wrap" if closed else "nearest") if len(pts) > 4 else pts
-        r = resample(sm, stitch_len, closed)
+        r = follow(sm, stitch_len, closed)
         if len(r) >= 2:
             lines.append(r)
     runs, pos = [], start
@@ -884,10 +945,12 @@ class Sequencer:
             fwd = (tb - ta) % L
             if min(fwd, L - fwd) > 3 * d + 15:
                 break
-            ts = ta + (np.linspace(0, fwd, max(2, int(fwd / 2.0) + 2)) if fwd <= L - fwd
-                       else -np.linspace(0, L - fwd, max(2, int((L - fwd) / 2.0) + 2)))
+            # follow the outline closely: chords between far-apart points would cut across notches
+            # (beside the crossbar of a small t) where they show
+            ts = ta + (np.linspace(0, fwd, max(2, int(fwd / 0.1) + 2)) if fwd <= L - fwd
+                       else -np.linspace(0, L - fwd, max(2, int((L - fwd) / 0.1) + 2)))
             route = np.array([ring.interpolate(t % L).coords[0] for t in ts])
-            return np.vstack([a, route, b])
+            return np.vstack([a, follow(route, 2.0, tol=0.08), b])
         return None
 
     def add_run(self, pts: np.ndarray, area: "TravelArea | None" = None, shows: bool = True):
@@ -896,13 +959,14 @@ class Sequencer:
             return
         p0 = pts[0]
         nxt = pts[1] if len(pts) > 1 else None
+        gap = float(np.hypot(*(p0 - self.pos))) if self.pos is not None else 0.0
         if self.pos is None or self.cut:
             self._start_at(p0, nxt)
-        elif float(np.hypot(*(p0 - self.pos))) > 1.5:
+        # a short hop is sewn straight across only inside the shape: between small letters it would show
+        elif gap > 1.5 or gap > 0.5 and (area is None or not area.inside.contains(LineString([self.pos, p0]))):
             route, hidden = None, False
             if self.router is not None:  # first choice: hidden under stitching still to come
-                d = float(np.hypot(*(p0 - self.pos)))
-                route = self.router.route(self.pos, p0, max_len=min(3 * d + 20, 80.0))
+                route = self.router.route(self.pos, p0, max_len=min(3 * gap + 20, 80.0))
                 hidden = route is not None
             if route is None:
                 route = self._travel(self.pos, p0, area)

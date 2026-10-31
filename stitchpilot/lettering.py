@@ -6,6 +6,7 @@ import numpy as np
 from .settings import TextItem
 
 GAP_MM = 3.0  # space between picture and text lines
+TEXT_GAP = 255  # compose(layer=True): inside a line of text, between the letters
 
 
 def ensure_qt() -> None:
@@ -186,9 +187,14 @@ def _paste(dst: np.ndarray, src: np.ndarray, x: int, y: int) -> None:
     dst[y:y + h, x:x + w] = out.astype(np.uint8)
 
 
-def compose(img: np.ndarray | None, texts: list[TextItem], mm_per_px: float) -> np.ndarray:
-    """Stack text above/below the (already cut-out, cropped) picture, or centre it on top."""
-    pieces = {pos: [(t, render_text(t, t.height_mm / mm_per_px)) for t in texts if t.position == pos and t.text.strip()]
+def compose(img: np.ndarray | None, texts: list[TextItem], mm_per_px: float,
+            layer: bool = False) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+    """Stack text above/below the (already cut-out, cropped) picture, or centre it on top.
+
+    With layer=True also returns where the lettering is: 1 + the item's index in texts on its letters,
+    TEXT_GAP elsewhere in a line of text set above or below the picture, 0 everywhere else."""
+    pieces = {pos: [(i, render_text(t, t.height_mm / mm_per_px)) for i, t in enumerate(texts)
+                    if t.position == pos and t.text.strip()]
               for pos in ("above", "below", "over")}
     gap = int(round(GAP_MM / mm_per_px))
     has_img = img is not None and img.size > 4
@@ -197,21 +203,29 @@ def compose(img: np.ndarray | None, texts: list[TextItem], mm_per_px: float) -> 
         pieces["over"] = []
     rows = [r for _, r in pieces["above"]] + ([img] if has_img else []) + [r for _, r in pieces["below"]]
     if not rows:
-        return np.zeros((1, 1, 4), np.uint8)
+        return (np.zeros((1, 1, 4), np.uint8), np.zeros((1, 1), np.uint8)) if layer else np.zeros((1, 1, 4), np.uint8)
     W = max(r.shape[1] for r in rows)
     H = sum(r.shape[0] for r in rows) + gap * (len(rows) - 1)
     canvas = np.zeros((H, W, 4), np.uint8)
+    where = np.zeros((H, W), np.uint8)
+    item = {id(r): i for pos in pieces.values() for i, r in pos}
     y = 0
     img_y = 0
     for r in rows:
+        x = (W - r.shape[1]) // 2
         if r is img:
             img_y = y
-            canvas[y:y + r.shape[0], (W - r.shape[1]) // 2:(W - r.shape[1]) // 2 + r.shape[1]] = r
+            canvas[y:y + r.shape[0], x:x + r.shape[1]] = r
         else:
-            _paste(canvas, r, (W - r.shape[1]) // 2, y)
+            _paste(canvas, r, x, y)
+            box = where[y:y + r.shape[0], x:x + r.shape[1]]
+            box[:] = TEXT_GAP
+            box[r[..., 3] >= 128] = 1 + item[id(r)]
         y += r.shape[0] + gap
-    for _, r in pieces["over"]:
+    for i, r in pieces["over"]:
         ih, iw = img.shape[:2]
         rh, rw = min(r.shape[0], ih), min(r.shape[1], W)
-        _paste(canvas, r[:rh, :rw], (W - rw) // 2, img_y + (ih - rh) // 2)
-    return canvas
+        x, y = (W - rw) // 2, img_y + (ih - rh) // 2
+        _paste(canvas, r[:rh, :rw], x, y)
+        where[y:y + rh, x:x + rw][r[:rh, :rw, 3] >= 128] = 1 + i
+    return (canvas, where) if layer else canvas

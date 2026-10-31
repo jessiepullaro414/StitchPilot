@@ -5,8 +5,9 @@ import time
 from pathlib import Path
 
 here = Path(__file__).parent
-TESTS = ["run_pipeline", "features", "ai_mock", "gui_smoke", "edit_smoke", "edit_keep_smoke", "simplify_smoke", "mac_bits",
-         "project_smoke", "quality_smoke", "shape_smoke", "delight_smoke", "web_smoke", "lambda_smoke", "imagegen_smoke", "account_smoke", "update_smoke", "theme_shots"]
+TESTS = ["run_pipeline", "features", "ai_mock", "gui_smoke", "edit_smoke", "edit_keep_smoke", "simplify_smoke",
+         "mac_bits", "project_smoke", "quality_smoke", "fine_smoke", "shape_smoke", "delight_smoke", "web_smoke",
+         "lambda_smoke", "imagegen_smoke", "account_smoke", "update_smoke", "theme_shots"]
 failed = []
 for name in TESTS:
     t = time.time()

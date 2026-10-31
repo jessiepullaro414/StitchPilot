@@ -22,6 +22,7 @@ MAX_EXPOSED = 2.0  # mm of travel allowed on top of sewn stitches (leaving / rea
 EDGE_COST = 2.5
 MAX_EDGE = 12.0  # mm
 SNAP = 1.25  # mm: start and end points may sit this far outside the coverable area
+MAX_BARE = 0.5  # mm of a route allowed over fabric nothing will cover
 
 
 class CoverMap:
@@ -59,6 +60,8 @@ class Router:
         self.lut = np.full(cm.n + 1, np.inf)  # index rid + 1 (so -1, no region, maps to inf)
         self.lut[1:][later | mine] = 1.0
         ok = np.isfinite(self.lut[cm.rid + 1]).astype(np.uint8)
+        # where a finished route may go: covered spots, give or take a cell
+        self.coverable = cv2.dilate(ok, np.ones((3, 3), np.uint8)).astype(bool)
         # keep a quarter millimetre clear of anything that won't be covered
         self.ok = cv2.erode(ok, np.ones((3, 3), np.uint8)).astype(bool)
         # cells within half a millimetre of the edge of the coverable area
@@ -159,9 +162,17 @@ class Router:
         path = np.vstack([a, pts, b])
         line = LineString(path).simplify(0.2)
         path = np.asarray(line.coords)
-        if line.length > max_len:
+        if line.length > max_len or self._bare(path) > MAX_BARE:
             return None
         return densify(path, 2.5)
+
+    def _bare(self, path: np.ndarray) -> float:
+        """Length (mm) of a path over fabric that nothing will cover. Straightening a route can cut across
+        the gap between thin strokes (small lettering), where it would show."""
+        fine = densify(path, 0.1)
+        mid = (fine[1:] + fine[:-1]) / 2
+        g = np.clip((mid * GRID).astype(int), 0, (self.coverable.shape[1] - 1, self.coverable.shape[0] - 1))
+        return float((np.hypot(*np.diff(fine, axis=0).T) * ~self.coverable[g[:, 1], g[:, 0]]).sum())
 
     @staticmethod
     def _snap(cost: np.ndarray, g: np.ndarray) -> tuple[int, int] | None:

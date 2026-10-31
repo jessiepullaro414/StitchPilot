@@ -15,6 +15,7 @@ from .prep import Prepared, Progress, prepare
 from .settings import Settings, ShapeEdit
 
 FILL_ANGLES = [45, 135, 15, 105, 75, 165, 0, 90]
+RUN_MAX_MM = 0.55  # strokes measured narrower than this sew as a run, wider ones as satin (0.3 mm measures ~0.5)
 
 
 @dataclass
@@ -130,12 +131,14 @@ class _Region:
     edit: ShapeEdit | None = None
     hints: list = field(default_factory=list)  # per path: satin clips and corners at junctions (mm)
     dt: np.ndarray | None = None
+    bare: np.ndarray | None = None  # bare fabric (nothing sewn) in the same crop as mask
+    lettering: bool = False  # letters of added text
 
 
 def _analyse(r: _Region, ppmm: float, s: Settings) -> None:
     dt = cv2.distanceTransform(r.mask, cv2.DIST_L2, 5)
     r.dt = dt
-    polys = st.mask_to_polygons(r.mask, r.ox, r.oy, ppmm, s.min_region_mm2)
+    polys = st.mask_to_polygons(r.mask, r.ox, r.oy, ppmm, s.min_region_mm2, r.bare)
     r.geom = unary_union(polys) if polys else None
     skel = st.join_through(st.skeleton_paths(r.mask, dt), dt, overlap=0.3 * ppmm)
     widths, length = [], 0.0
@@ -165,7 +168,10 @@ def _analyse(r: _Region, ppmm: float, s: Settings) -> None:
     w = np.concatenate(widths) if widths else np.array([0.0])
     w90 = float(np.percentile(w, 90))
     r.w90 = w90
-    if r.geom is None or r.geom.is_empty or w90 < 1.0:
+    # Strokes down to about half a millimetre sew as narrow satin (widened to st.SATIN_MIN_MM): a run
+    # stitch is far thinner, so fine letters and lines would change weight from stroke to stroke. Letters
+    # are always satin: in small text some would measure just under the limit and look different.
+    if r.geom is None or r.geom.is_empty or w90 < (0.0 if r.lettering else RUN_MAX_MM):
         r.kind = "run"
     elif w90 <= s.satin_max_width and length >= 1.2 * w90:
         r.kind = "satin"
@@ -248,9 +254,11 @@ def _region_runs(r: _Region, ppmm: float, s: Settings, angle: float, pos, exit=N
         forced = _wanted(r) != r.kind
         if forced:  # the user asked for satin: let the columns be as wide as the shape (within reason)
             s = replace(s, satin_max_width=min(12.0, max(s.satin_max_width, r.w90 + 0.5)))
-        runs = st.satin_runs(r.paths, r.geom, _halfwidth_fn(r, ppmm), s, pos, r.hints)
-        # satin can't follow blobby or branching shapes well: fall back to fill if it leaves gaps
-        if runs and (forced or st.coverage(runs, r.mask, r.ox, r.oy, ppmm, s.satin_spacing * 1.5) >= 0.85):
+        report: dict = {}
+        runs = st.satin_runs(r.paths, r.geom, _halfwidth_fn(r, ppmm), s, pos, r.hints, report)
+        # satin can't follow blobby or branching shapes well: fall back to fill if it leaves gaps or fans out
+        if runs and (forced or report.get("fan_mm", 0.0) <= 1.0
+                     and st.coverage(runs, r.mask, r.ox, r.oy, ppmm, s.satin_spacing * 1.5) >= 0.85):
             return [(runs, _area(r.geom))], "satin"
     pattern = _pattern(r)
     if pattern in pat.OPEN:  # open decorative fill: no underlay, and travel across it would show
@@ -298,7 +306,10 @@ def digitize(rgba: np.ndarray, s: Settings, progress: Progress | None = None,
                 continue
             x0, y0 = max(0, x - 1), max(0, y - 1)
             sub = (cc[y0:y + h + 1, x0:x + w + 1] == i).astype(np.uint8)
-            regions.setdefault(c, []).append(_Region(c, sub, x0, y0, a / ppmm ** 2))
+            win = np.s_[y0:y + h + 1, x0:x + w + 1]
+            letters = prep.lettering is not None and float(prep.lettering[win][sub > 0].mean()) > 0.5
+            regions.setdefault(c, []).append(_Region(c, sub, x0, y0, a / ppmm ** 2, bare=labels[win] < 0,
+                                                     lettering=letters))
     total = sum(len(v) for v in regions.values()) or 1
     done = 0
     for rs in regions.values():
