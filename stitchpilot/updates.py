@@ -32,7 +32,7 @@ from . import __version__
 # signing key (build/publish_update.py keygen, deploy/UPDATES.md). Until the key is filled in, updates are off.
 UPDATE_URL = os.environ.get("STITCHPILOT_UPDATE_URL",
                             "https://github.com/jessiepullaro414/StitchPilot/releases/latest/download/latest.json")
-PUBLIC_KEY = os.environ.get("STITCHPILOT_UPDATE_KEY", "")
+PUBLIC_KEY = os.environ.get("STITCHPILOT_UPDATE_KEY", "yUp/CLKGiGkCcfmv5+ffhNdiELyQl8dTXOmO8DOG8Hs=")
 
 FROZEN = getattr(sys, "frozen", False)
 MANIFEST_LIMIT = 64 * 1024
