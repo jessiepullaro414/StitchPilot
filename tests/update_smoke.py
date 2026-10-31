@@ -109,6 +109,8 @@ assert updates.check() is None, "rollback refused"
 saved_url = updates.UPDATE_URL
 updates.UPDATE_URL = "http://127.0.0.1:9/latest.json"
 expect_error(updates.check, "Couldn't reach")
+updates.UPDATE_URL = f"{base}/no-release-yet/latest.json"  # before the first signed release: nothing to do
+assert updates.check() is None
 updates.UPDATE_URL = saved_url
 (site / "latest.json").write_bytes(good)
 assert updates.check().version == nv
@@ -231,6 +233,43 @@ print("updated and restarted:", relaunched[0].name, "| left in the folder:", sor
 # ---- a computer this release has no file for: point at the download page
 updates.platform_key = lambda: "mac-arm64"
 r = updates.check()
-assert r.url == "" and r.page == "https://stitchpilot.jessiescars.com", r
+assert r.url == "" and r.page == "https://github.com/jessiepullaro414/StitchPilot/releases/latest", r
+
+# ---- the GitHub route: the draft release's files are downloaded and their build attestations checked (gh,
+# stood in for here), latest.json is signed for them and attached; it points at that release's own files
+sys.path.insert(0, str(root / "build"))
+import publish_update as pu  # noqa: E402
+
+draft = tmp / "draft"
+draft.mkdir()
+(draft / "StitchPilot-99.1.0.exe").write_bytes(NEW)
+(draft / "StitchPilot-99.1.0-mac-arm64.zip").write_bytes(b"PK mac StitchPilot")
+calls = []
+
+
+def fake_gh(*args, capture=False):
+    calls.append(args)
+    if args[:2] == ("release", "download"):
+        for f in draft.iterdir():
+            shutil.copy2(f, Path(args[args.index("-D") + 1]) / f.name)
+    return ""
+
+
+pu.gh = fake_gh
+sys.argv = ["publish_update.py", "release", "--github", "v99.1.0", "--notes", "From GitHub", "--key", str(key),
+            "--out", str(tmp / "gh-release")]
+pu.main()
+steps = [c[:2] for c in calls]
+assert steps == [("release", "download"), ("attestation", "verify"), ("attestation", "verify"),
+                 ("release", "upload")], steps
+assert "--draft=false" not in sum(calls, ()), "publishing stays the user's click"
+shutil.copy2(tmp / "gh-release" / "latest.json", site / "latest.json")
+gh_base = "https://github.com/jessiepullaro414/StitchPilot/releases/download/v99.1.0/"
+r = updates.check()
+assert r.version == "99.1.0" and r.url == gh_base + "StitchPilot-99.1.0-mac-arm64.zip" and r.size == 18, r
+updates.platform_key = lambda: "windows"
+r = updates.check()
+assert r.url == gh_base + "StitchPilot-99.1.0.exe" and r.size == len(NEW) and r.notes == "From GitHub", r
+print("GitHub release signed:", r.url)
 srv.shutdown()
 print("update smoke OK")

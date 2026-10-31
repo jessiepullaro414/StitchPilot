@@ -2,7 +2,7 @@
 # tests, then the Windows exe and the Mac apps, then a DRAFT GitHub release with the files attached.
 #
 # Nothing goes out to users from here. The draft stays hidden until you publish it, and app updates
-# only go out when you sign them on your own computer with build/publish_update.py (deploy/aws/UPDATES.md).
+# only go out when you sign them on your own computer with build/publish_update.py (deploy/UPDATES.md).
 # The signing key never comes near GitHub.
 #
 # Build check: Actions ▸ Release ▸ Run workflow builds everything the same way without a tag or a release;

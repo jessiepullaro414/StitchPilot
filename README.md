@@ -152,8 +152,9 @@ The web app (`stitchpilot/web`) still uses each visitor's own Claude key for now
 
 StitchPilot checks for a newer version once a day (and on **Help ▸ Check for updates…**). The portable Windows
 exe updates itself: **Update and restart** downloads the new exe, checks it, swaps it in and restarts. On a Mac
-it offers the download. Releases are signed with your own key, so only you can publish an update. Set-up and
-releasing: [deploy/aws/UPDATES.md](deploy/aws/UPDATES.md) (`build/publish_update.py`, S3 bucket `deploy/aws/updates.yaml`).
+it offers the download. Updates come from the repo's GitHub Releases, and each release's `latest.json` is signed
+with your own key, so only you can publish an update. Set-up and releasing: [deploy/UPDATES.md](deploy/UPDATES.md)
+(`build/publish_update.py release --github vX.Y.Z`).
 
 ## Automated builds
 

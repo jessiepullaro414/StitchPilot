@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   StitchPilot update site: a public-read S3 bucket holding each release's app files and the signed
-  latest.json that copies of StitchPilot check (see UPDATES.md). Anyone can read it; only your AWS
+  latest.json that copies of StitchPilot check (see deploy/UPDATES.md: GitHub Releases is the usual host, this bucket the alternative). Anyone can read it; only your AWS
   account can write it, and the app ignores anything not signed with your update key.
 
 Parameters:

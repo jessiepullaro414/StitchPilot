@@ -1,7 +1,8 @@
 """Over-the-air updates for the desktop app.
 
-- Each release publishes the new app files and a small `latest.json` (build/publish_update.py) to the
-  update site (UPDATE_URL, an S3 bucket: deploy/aws/updates.yaml).
+- Each release publishes the new app files and a small `latest.json` (build/publish_update.py) as a GitHub
+  release. UPDATE_URL is GitHub's address for the newest published release's latest.json, and the entries in
+  it point at that release's own (versioned, unchanging) files. deploy/UPDATES.md.
 - `latest.json` is signed with StitchPilot's private Ed25519 key, which never leaves the publisher's PC.
   The app only trusts it if the signature matches PUBLIC_KEY, and only takes a newer version, so whoever
   can change the hosted files still can't push a program to people's computers or roll them back.
@@ -27,9 +28,10 @@ from pathlib import Path
 
 from . import __version__
 
-# Filled in when the update site is set up (deploy/aws/UPDATES.md): the address of latest.json, and the
-# public half of the signing key (build/publish_update.py keygen). Until both are set, updates are off.
-UPDATE_URL = os.environ.get("STITCHPILOT_UPDATE_URL", "")
+# The address of latest.json (drafts and pre-releases never count as "latest"), and the public half of the
+# signing key (build/publish_update.py keygen, deploy/UPDATES.md). Until the key is filled in, updates are off.
+UPDATE_URL = os.environ.get("STITCHPILOT_UPDATE_URL",
+                            "https://github.com/jessiepullaro414/StitchPilot/releases/latest/download/latest.json")
 PUBLIC_KEY = os.environ.get("STITCHPILOT_UPDATE_KEY", "")
 
 FROZEN = getattr(sys, "frozen", False)
@@ -106,6 +108,10 @@ def check(current: str = __version__) -> Release | None:
     try:
         with _get(UPDATE_URL, 20) as r:
             raw = r.read(MANIFEST_LIMIT + 1)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:  # no signed release published yet
+            return None
+        raise UpdateError("Couldn't reach the StitchPilot update site. Try again later.") from None
     except (urllib.error.URLError, TimeoutError, OSError):
         raise UpdateError("Couldn't reach the StitchPilot update site. Check your internet connection.") from None
     if len(raw) > MANIFEST_LIMIT:

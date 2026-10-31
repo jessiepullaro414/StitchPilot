@@ -16,7 +16,7 @@ Things worth reporting include anything that could:
 
 - **App updates are signed.** The app only installs an update signed with the StitchPilot release key, checks
   the download against what was signed, and never goes back to an older version. The key is kept offline,
-  never on GitHub or the update server. See [deploy/aws/UPDATES.md](deploy/aws/UPDATES.md).
+  never on GitHub. See [deploy/UPDATES.md](deploy/UPDATES.md).
 - **Builds are traceable.** Release files are built by GitHub Actions from this repository's code. Each one
   carries a build attestation that you can check:
   `gh attestation verify <file> -R jessiepullaro414/StitchPilot`
