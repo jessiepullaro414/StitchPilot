@@ -295,5 +295,54 @@ r = gw.lambda_handler({"rawPath": "/health", "requestContext": {"http": {"method
 assert r["statusCode"] == 200
 for res in (post("/anthropic/v1/messages", good, {"x-api-key": token}),):
     assert "SERVER" not in res["body"] and SECRET not in json.dumps(res), "no key or secret ever comes back"
+
+# ---- Plus cut-out: one AI action through the gateway, which invokes the cut-out function; refunded if it fails
+import numpy as np  # noqa: E402
+
+from stitchpilot import cutout  # noqa: E402
+
+cut_calls = []
+
+
+def fake_cutout(raw):
+    cut_calls.append(json.loads(raw))
+    if Fake.fail_next:
+        Fake.fail_next -= 1
+        return 502, {"content-type": "application/json"}, json.dumps(
+            {"type": "error", "error": {"type": "api_error", "message": "The cut-out didn't work."}}).encode()
+    small = Image.new("L", (64, 32), 0)
+    small.paste(255, (16, 0, 48, 32))
+    buf = io.BytesIO()
+    small.save(buf, "PNG")
+    answer = {"mask": base64.b64encode(buf.getvalue()).decode()}
+    return 200, {"content-type": "application/json"}, json.dumps(answer).encode()
+
+
+gw._cutout = fake_cutout
+Fake.limits["actions"] = 10
+used = Fake.usage[("maker@example.com", "actions")]
+photo = np.zeros((300, 600, 4), np.uint8)
+photo[..., 3] = 255
+alpha = cutout.cloud(photo, token)
+assert alpha.shape == (300, 600) and alpha[150, 300] > 200 and alpha[150, 20] < 50, "mask scaled back to the picture"
+assert set(cut_calls[-1]) == {"image"} and Fake.usage[("maker@example.com", "actions")] == used + 1
+Fake.fail_next = 1
+try:
+    cutout.cloud(photo, token)
+    raise AssertionError("the failure should come through")
+except cutout.CutoutError as e:
+    print("cut-out failure:", e)
+assert Fake.usage[("maker@example.com", "actions")] == used + 1, "a failed cut-out is refunded"
+calls = len(cut_calls)
+assert post("/cutout", {"image": "x", "extra": 1}, {"authorization": f"Bearer {token}"})["statusCode"] == 400
+assert post("/cutout", {"image": ""}, {"authorization": f"Bearer {token}"})["statusCode"] == 400
+assert post("/cutout", {"image": "eA=="}, {})["statusCode"] == 401
+assert len(cut_calls) == calls and Fake.usage[("maker@example.com", "actions")] == used + 1, "refusals cost nothing"
+Fake.limits["actions"] = used + 1
+try:
+    cutout.cloud(photo, token)
+    raise AssertionError("over the allowance")
+except account.OutOfAllowance as e:
+    print("out of AI actions:", e)
 w.close()
 print("account ok")

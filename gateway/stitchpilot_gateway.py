@@ -10,10 +10,14 @@ URL, and the app's device token in place of an API key). For each request the ga
 3. makes the real call with StitchPilot's own keys and returns the answer unchanged;
 4. gives the allowance back if the AI call failed.
 
-No dependencies beyond the Python standard library, so it deploys as a tiny zip (deploy/aws).
+Cut-outs (POST /cutout, {"image": base64 picture}) go the same way, but step 3 invokes StitchPilot's own
+cut-out function (gateway/cutout, BiRefNet) instead of a provider; the answer is {"mask": base64 PNG}.
+
+No dependencies beyond the Python standard library (and boto3, which the Lambda runtime includes, for the
+cut-out), so it deploys as a tiny zip (deploy/aws).
 
 Environment: ANTHROPIC_API_KEY, OPENAI_API_KEY, STITCHPILOT_SHOP_URL, STITCHPILOT_GATEWAY_SECRET,
-and optionally ANTHROPIC_BASE_URL / OPENAI_BASE_URL (tests point these at fakes).
+CUTOUT_FUNCTION, and optionally ANTHROPIC_BASE_URL / OPENAI_BASE_URL (tests point these at fakes).
 """
 from __future__ import annotations
 
@@ -101,10 +105,34 @@ def _image_request(body: dict) -> tuple[str, int]:
     return "images", n
 
 
+def _cutout_request(body: dict) -> tuple[str, int]:
+    if not isinstance(body.get("image"), str) or not body["image"] or set(body) != {"image"}:
+        raise Refused(400, "Send one picture to cut out.")
+    return "actions", 1
+
+
 ROUTES = {
     "/anthropic/v1/messages": ("claude", _claude_request),
     "/openai/v1/images/generations": ("openai", _image_request),
+    "/cutout": ("cutout", _cutout_request),
 }
+
+
+def _cutout(raw: bytes) -> tuple[int, dict, bytes]:
+    """Runs the cut-out function (no address of its own: only this gateway may invoke it)."""
+    import boto3
+    from botocore.config import Config
+
+    client = boto3.client("lambda", config=Config(read_timeout=150, retries={"max_attempts": 0}))
+    r = client.invoke(FunctionName=os.environ["CUTOUT_FUNCTION"], Payload=raw)
+    out = json.loads(r["Payload"].read() or b"{}")
+    if r.get("FunctionError") or not isinstance(out, dict) or "mask" not in out:
+        log.error("cut-out failed: %s", r.get("FunctionError") or out.get("error"))
+        status = 400 if isinstance(out, dict) and "couldn't be read" in str(out.get("error", "")) else 502
+        message = out.get("error") if isinstance(out, dict) and out.get("error") else "The cut-out didn't work."
+        return status, {"content-type": "application/json"}, json.dumps(
+            {"type": "error", "error": {"type": "api_error", "message": message}}).encode()
+    return 200, {"content-type": "application/json"}, json.dumps({"mask": out["mask"]}).encode()
 
 
 def _token(headers: dict) -> str:
@@ -119,6 +147,8 @@ def _token(headers: dict) -> str:
 
 
 def _upstream(provider: str, path: str, query: str, raw: bytes, headers: dict) -> tuple[int, dict, bytes]:
+    if provider == "cutout":
+        return _cutout(raw)
     if provider == "claude":
         base = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
         h = {"content-type": "application/json", "x-api-key": os.environ["ANTHROPIC_API_KEY"],

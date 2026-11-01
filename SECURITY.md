@@ -17,6 +17,8 @@ Things worth reporting include anything that could:
 - **App updates are signed.** The app only installs an update signed with the StitchPilot release key, checks
   the download against what was signed, and never goes back to an older version. The key is kept offline,
   never on GitHub. See [deploy/UPDATES.md](deploy/UPDATES.md).
+- **Downloaded models are checked.** The free AI cut-out downloads its model once and only uses it if its
+  SHA-256 matches the one built into the app. The Plus cut-out's model is checked the same way on AWS.
 - **Builds are traceable.** Release files are built by GitHub Actions from this repository's code. Each one
   carries a build attestation that you can check:
   `gh attestation verify <file> -R jessiepullaro414/StitchPilot`

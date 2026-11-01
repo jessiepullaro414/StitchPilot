@@ -730,3 +730,75 @@ class UpdateDialog(QDialog):
     def reject(self):
         self._cancel = self._thread is not None
         super().reject()
+
+
+class CutoutDownloadDialog(QDialog):
+    """Downloads the free on-device cut-out model (cutout.MODEL), once, with progress and Cancel."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        from . import cutout
+
+        self.cutout = cutout
+        self.setWindowTitle("AI cut-out")
+        self.setMinimumWidth(460)
+        self._cancel = False
+        self._thread: threading.Thread | None = None
+        lay = QVBoxLayout(self)
+        mb = cutout.MODEL.size / 1e6
+        self.text = QLabel(f"<b>Cut out the subject with AI, free, on this computer.</b><br>StitchPilot downloads "
+                           f"its cut-out model once ({mb:.0f} MB). After that it works offline and nothing about "
+                           "your pictures leaves this computer.")
+        self.text.setWordWrap(True)
+        lay.addWidget(self.text)
+        self.bar = QProgressBar(maximum=1000, textVisible=False)
+        self.bar.hide()
+        lay.addWidget(self.bar)
+        bb = QDialogButtonBox()
+        self.go = bb.addButton(f"Download ({mb:.0f} MB)", QDialogButtonBox.ButtonRole.AcceptRole)
+        self.go.setObjectName("ai")
+        self.later = bb.addButton("Not now", QDialogButtonBox.ButtonRole.RejectRole)
+        self.go.clicked.connect(self.start)
+        self.later.clicked.connect(self.reject)
+        lay.addWidget(bb)
+        self._sig = _Result()
+        self._sig.done.connect(self._finished)
+        self._prog = _Progress()
+        self._prog.moved.connect(lambda f: self.bar.setValue(int(f * 1000)))
+
+    def start(self):
+        self.go.setEnabled(False)
+        self.later.setText("Cancel")
+        self.bar.setValue(0)
+        self.bar.show()
+        self.text.setText("Downloading the AI cut-out…")
+
+        def work():
+            try:
+                res = self.cutout.download(lambda d, t: self._prog.moved.emit(d / max(t, 1)), lambda: self._cancel)
+            except Exception as e:  # shown in the dialog
+                res = e
+            try:
+                self._sig.done.emit("download", res)
+            except RuntimeError:  # the dialog is gone
+                pass
+
+        self._thread = threading.Thread(target=work, daemon=True)
+        self._thread.start()
+
+    def _finished(self, _what, res):
+        self._thread = None
+        if self._cancel:
+            return
+        if isinstance(res, Exception):
+            self.bar.hide()
+            self.text.setText(f"<b>The AI cut-out didn't download.</b> {res}")
+            self.go.setEnabled(True)
+            self.go.setText("Try again")
+            self.later.setText("Not now")
+            return
+        self.accept()
+
+    def reject(self):
+        self._cancel = self._thread is not None
+        super().reject()

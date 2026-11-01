@@ -12,5 +12,4 @@ PySide6==6.12.0
 anthropic==2.3.0
 openai==3.40.0
 cryptography==50.0.2  # checks the signature on app updates
-# optional: neural background removal for busy photos (large download)
-# rembg[cpu]
+onnxruntime==1.31.1  # runs the free AI cut-out (its model is downloaded when someone asks for it)

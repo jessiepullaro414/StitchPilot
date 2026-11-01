@@ -71,7 +71,7 @@ the worksheet and the complexity details stay desktop-only for now.
 | Step | How |
 |---|---|
 | **Reads** | PNG, JPG, WEBP, GIF, BMP, TIFF, HEIC/HEIF/AVIF, SVG, ICO, PSD (flattened)… |
-| **Background** | Uses transparency if present; otherwise removes a plain background colour (including holes such as letter counters, unless you tick *Stitch background-coloured areas inside*). *Cut out subject* uses GrabCut, or the neural `rembg` matte if installed. |
+| **Background** | Uses transparency if present; otherwise removes a plain background colour (including holes such as letter counters, unless you tick *Stitch background-coloured areas inside*). *Cut out subject* finds the subject of a busy photo with AI: free on this computer (ISNet, a one-time 179 MB download, checked against its SHA-256), or *✨ Plus cut-out* for the finest edges (BiRefNet on StitchPilot's AI service; one AI action, kept with the picture and saved in the project). Without either it falls back to OpenCV's GrabCut. |
 | **Colours** | Edge-preserving smoothing, then colour reduction in CIELAB. *Automatic* picks the smallest palette that leaves no distinct colour unexplained and ignores anti-aliasing blends. |
 | **Clean-up** | Majority filter + merging of specks too small to sew (size set by the *Detail* slider). |
 | **Stitch types** | Each shape is measured with a distance transform and centreline: hair-thin lines → triple *bean* stitch; strokes up to the max satin width → *satin* columns that follow the stroke's direction; everything else → *tatami fill*. Satin that can't cover a shape falls back to fill. |
@@ -203,6 +203,7 @@ app.py                 entry point
 stitchpilot/
   imageio.py           load any image (Pillow, pillow-heif, Qt SVG)
   prep.py              background removal, scaling, colour reduction, clean-up
+  cutout.py            Cut out subject: on-device ISNet (downloaded once), Plus cut-out, GrabCut fallback
   stitches.py          skeletons, junctions, tatami fill, satin with mitred corners, bean stitch, sequencer
   routing.py           hidden travel: routes under stitching still to come, fill exits, shape grouping
   digitize.py          region analysis, stitch-type choice, colour ordering -> Design
@@ -222,6 +223,7 @@ stitchpilot/
                        static/ (the page: HTML, CSS, JS, no build step)
 deploy/aws/            AWS: web app template (Lambda + S3), AI gateway template, guides
 gateway/               StitchPilot AI gateway (Lambda, standard library only): allowance check + Claude/OpenAI
+  cutout/              the Plus cut-out function (BiRefNet on onnxruntime; model kept in S3)
   dialogs.py           lettering dialog, PDF worksheet
   editing.py           stitch edit operations (select, delete, move, insert, new run) and the edit log that
                        re-applies them after settings change

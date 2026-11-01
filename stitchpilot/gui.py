@@ -37,10 +37,11 @@ from .template import default_paper, write_template
 from .analysis import density_image
 from .complexity import analyse as analyse_cx
 from .complexity import analyse_source, find_friendly, problem_overlay
-from . import account, cutfiles, imagegen, updates
+from . import account, cutfiles, cutout, imagegen, updates
 from . import patterns as pat
 from .dialogs import (
-    AccountDialog, ImageGenDialog, SuggestionsDialog, TextDialog, TextFixDialog, UpdateDialog, _Result,
+    AccountDialog, CutoutDownloadDialog, ImageGenDialog, SuggestionsDialog, TextDialog, TextFixDialog, UpdateDialog,
+    _Result,
     write_worksheet,
 )
 from .digitize import ColorBlock, Design, Shape, digitize
@@ -650,6 +651,7 @@ class MainWindow(QMainWindow):
         self.resize(1400, 900)
         self.setAcceptDrops(True)
         self.qs = app_settings()
+        cutout.MODEL_DIR = data_dir() / "models"  # the free AI cut-out lives with the app's other data
         self.pool = QThreadPool.globalInstance()
         self.sig = Signals()
         self.sig.progress.connect(self._on_progress)
@@ -676,6 +678,7 @@ class MainWindow(QMainWindow):
         self.texts: list[TextItem] = []
         self.text_fixes: list[TextFix] = []  # text in the picture redrawn cleanly (AI text clean-up)
         self.text_ai = False
+        self.cut_ai = False  # a StitchPilot Plus cut-out is running
         self.rotate, self.mirror = 0, False
         self.border_rgb = (30, 30, 30)
         self.fabric_rgb = FABRIC
@@ -859,6 +862,28 @@ class MainWindow(QMainWindow):
         self.bg.addItem("Stitch everything", "keep")
         self.bg.currentIndexChanged.connect(self._bg_changed)
         f.addRow("Background", self.bg)
+        # "Cut out subject": which cut-out is in use, and the better ones
+        self.cut_row = QWidget()
+        cl = QVBoxLayout(self.cut_row)
+        cl.setContentsMargins(0, 0, 0, 0)
+        self.cut_lbl = QLabel(objectName="muted")
+        self.cut_lbl.setWordWrap(True)
+        cl.addWidget(self.cut_lbl)
+        cb = QHBoxLayout()
+        self.cut_dl = QPushButton("Get free AI cut-out")
+        self.cut_dl.setToolTip(f"Download StitchPilot's AI cut-out model once ({cutout.MODEL.size / 1e6:.0f} MB).\n"
+                               "It runs on this computer: free, offline, and private.")
+        self.cut_dl.clicked.connect(self.download_cutout)
+        self.cut_plus = QPushButton("✨ Plus cut-out", objectName="ai")
+        self.cut_plus.setToolTip("StitchPilot Plus cuts out the subject on its AI service: the finest edges\n"
+                                 "(hair, fur, thin parts). Uses one AI action; kept with the picture.")
+        self.cut_plus.clicked.connect(self.run_cutout_plus)
+        cb.addWidget(self.cut_dl)
+        cb.addWidget(self.cut_plus)
+        cb.addStretch(1)
+        cl.addLayout(cb)
+        f.addRow("", self.cut_row)
+        self.cut_row.hide()
         sl.addLayout(f)
         self.keep_inside = QCheckBox("Stitch background-coloured areas\ninside the design (e.g. white eyes)")
         self.keep_inside.toggled.connect(self.changed)
@@ -1649,7 +1674,57 @@ class MainWindow(QMainWindow):
 
     def _bg_changed(self):
         self.keep_inside.setEnabled(self.bg.currentData() == "auto")
+        self._update_cut_row()
         self.changed()
+
+    def _update_cut_row(self):
+        show = self.bg.currentData() == "ai" and self.rgba is not None and not self.file_mode
+        self.cut_row.setVisible(show)
+        if not show:
+            return
+        known = cutout.known(self.rgba)
+        ready = cutout.model_ready()
+        if known is not None and known[1] == cutout.CLOUD:
+            self.cut_lbl.setText("✨ Cut out by StitchPilot Plus.")
+        elif ready:
+            self.cut_lbl.setText("Cut out with AI on this computer. For the finest edges (hair, fur), try a Plus "
+                                 "cut-out.")
+        else:
+            self.cut_lbl.setText("Using the basic cut-out, which can keep bits of background. The free AI cut-out "
+                                 "is much cleaner.")
+        self.cut_dl.setVisible(not ready)
+        self.cut_plus.setEnabled(not self.ai_running and not (known is not None and known[1] == cutout.CLOUD))
+
+    def download_cutout(self):
+        if CutoutDownloadDialog(self).exec():
+            self.statusBar().showMessage("AI cut-out ready ✂", 6000)
+            self._cutout_changed()
+
+    def _cutout_changed(self):
+        """A better cut-out is available for the picture: work it out again."""
+        self._prep = None
+        self.source_key = None
+        self._update_cut_row()
+        if self.can_convert():
+            self.convert()
+
+    def run_cutout_plus(self):
+        if self.rgba is None or self.ai_running or self.file_mode or not self._connected():
+            return
+        try:
+            account._gateway()
+        except account.AccountError as e:
+            QMessageBox.information(self, APP, str(e))
+            return
+        token, rgba = self._token(), self.rgba
+        self.busy = self.ai_running = self.cut_ai = True
+        self.gen += 1
+        self.cut_plus.setText("✨ Cutting out…")
+        self.cut_plus.setEnabled(False)
+        self.progress.setRange(0, 0)
+        self.progress.show()
+        self.statusBar().showMessage("StitchPilot Plus is cutting out the subject…")
+        self.pool.start(Job(self.gen, lambda p: ("cutout", cutout.cloud(rgba, token)), self.sig))
 
     def _border_changed(self):
         b = self.border.currentData()
@@ -1713,6 +1788,7 @@ class MainWindow(QMainWindow):
 
     def _update_enabled(self):
         self.ai_btn.setEnabled(self.rgba is not None and not self.file_mode)
+        self._update_cut_row()
         for w in (self.rot_btn, self.mir_btn):
             w.setEnabled(self.rgba is not None and not self.file_mode)
         self.add_text_btn.setEnabled(not self.file_mode)
@@ -1867,7 +1943,8 @@ class MainWindow(QMainWindow):
     def _reset(self, rgba):
         self.rgba = rgba
         self.gen += 1  # drop results of any job still running for the previous picture
-        self.busy = self.pending = self.ai_running = self.shape_ai = False
+        self.busy = self.pending = self.ai_running = self.shape_ai = self.cut_ai = False
+        self.cut_plus.setText("✨ Plus cut-out")
         self.file_mode = False
         self._restore_blocks = self._restore_log = None
         self.shape_ai_btn.setText("✨ Suggest with AI")
@@ -2126,8 +2203,10 @@ class MainWindow(QMainWindow):
         state = {**self.get_state(), **(extra or {})}
         if blocks is not None and self.edited and not self.edits_fixed and not self.file_mode:
             state["edit_log"] = [[op.to_dict() for op in step] for step in self.edit_log]
+        known = cutout.known(self.rgba) if self.rgba is not None else None
+        files = {"cutout.png": cutout.to_png(known[0])} if known is not None and known[1] == cutout.CLOUD else None
         project.save(path, state, self.source_name, self.source_bytes, blocks,
-                     (d.width_mm, d.height_mm) if d is not None else None)
+                     (d.width_mm, d.height_mm) if d is not None else None, files)
 
     def open_project(self, path: Path, recovered_from: Path | None = None) -> bool:
         """Open a .stitchpilot file. `recovered_from` is set when restoring an autosave."""
@@ -2148,6 +2227,10 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, APP, f"Couldn't open that project:\n{e}")
             return False
         self._reset(rgba)
+        if rgba is not None and "cutout.png" in proj.files:  # a Plus cut-out saved with the project
+            alpha = cutout.from_png(proj.files["cutout.png"])
+            if alpha is not None and alpha.shape == rgba.shape[:2]:
+                cutout.remember(rgba, alpha, cutout.CLOUD)
         self.path = src_file
         self.source_name, self.source_bytes, self.source_file = proj.source_name, proj.source_bytes, src_file
         orig = proj.state.get("_project_path")
@@ -2296,6 +2379,13 @@ class MainWindow(QMainWindow):
             self._show_text_fixes(val)
         elif kind == "friendly":
             self._apply_friendly(val)
+        elif kind == "cutout":
+            self.ai_running = self.cut_ai = False
+            self.cut_plus.setText("✨ Plus cut-out")
+            cutout.remember(self.rgba, val, cutout.CLOUD)
+            self._set_dirty(True)
+            self.statusBar().showMessage("Cut out by StitchPilot Plus ✨", 6000)
+            self._cutout_changed()
         elif kind == "batch":
             ok, failed, folder = val
             msg = f"Converted {ok} picture(s) into {folder}."
@@ -2349,7 +2439,14 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 100)
         self.progress.hide()
         self.statusBar().showMessage(f"Problem: {msg}", 15000)
-        if self.ai_running and self.text_ai:
+        if self.ai_running and self.cut_ai:
+            self.ai_running = self.cut_ai = False
+            self.cut_plus.setText("✨ Plus cut-out")
+            self._update_cut_row()
+            self._warn(f"The Plus cut-out didn't work:\n{msg}")
+            if self.pending:
+                self.convert()
+        elif self.ai_running and self.text_ai:
             self.ai_running = self.text_ai = False
             self.fix_text_btn.setText("✨ Clean up text in the picture")
             self._warn(f"Text clean-up didn't work:\n{msg}")
@@ -3299,6 +3396,7 @@ def selftest(src: str, dst: str) -> int:
         import anthropic  # noqa: F401  (packaged for AI assist, which imports it on first use)
         import openai  # noqa: F401  (packaged for "Create with AI")
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey  # noqa: F401  (updates)
+        import onnxruntime  # noqa: F401  (the free AI cut-out, imported when it's first used)
 
         assert "embroidery" in imagegen.build_prompt("a frog")
         Path(dst + ".txt").write_text(f"ok {d.stitch_count} stitches {len(d.blocks)} colours, "

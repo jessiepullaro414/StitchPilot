@@ -3,8 +3,9 @@ Transform: AWS::Serverless-2016-10-31
 Description: >
   StitchPilot AI gateway: the desktop app's AI requests go through this function, which checks the
   member's StitchPilot Plus allowance with stitchpilot.jessiescars.com and calls Claude / OpenAI with
-  StitchPilot's own keys. Standard library only: deploys as a tiny zip.
-  Deploy:  sam deploy --guided --template-file deploy/aws/gateway.yaml --stack-name stitchpilot-gateway
+  StitchPilot's own keys, or StitchPilot's own cut-out function (BiRefNet, model kept in S3).
+  Deploy:  sam build --template-file deploy/aws/gateway.yaml && sam deploy --guided --stack-name stitchpilot-gateway
+  Then upload the cut-out model once (see deploy/aws/SUBSCRIPTION.md).
 
 Parameters:
   AnthropicApiKey:
@@ -35,6 +36,14 @@ Parameters:
       Most requests handled at once (caps cost if something goes wrong). -1 = no reservation (needed on
       brand-new accounts whose total Lambda limit is only 10).
 
+  CutoutModelSha256:
+    Type: String
+    Default: 5600024376f572a557870a5eb0afb1e5961636bef4e1e22132025467d0f03333
+    AllowedPattern: '^[0-9a-f]{64}$'
+    Description: >
+      SHA-256 of the cut-out model you upload (BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx from the rembg
+      project's GitHub releases). The function refuses any other file.
+
 Conditions:
   HasReservedConcurrency: !Not [!Equals [!Ref ReservedConcurrency, -1]]
 
@@ -62,6 +71,10 @@ Resources:
           OPENAI_API_KEY: !Ref OpenAIApiKey
           STITCHPILOT_GATEWAY_SECRET: !Ref GatewaySecret
           STITCHPILOT_SHOP_URL: !Ref ShopUrl
+          CUTOUT_FUNCTION: !Ref Cutout
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref Cutout
       FunctionUrlConfig:
         AuthType: NONE  # the app authenticates with its device token; the gateway checks it with the shop
         InvokeMode: BUFFERED
@@ -76,7 +89,57 @@ Resources:
       Principal: "*"
       InvokedViaFunctionUrl: true
 
+  # ---- StitchPilot Plus cut-out (BiRefNet). No address: only the gateway invokes it, after the allowance check.
+  ModelBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+
+  CutoutLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 14
+
+  Cutout:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: python3.13
+      Architectures: [arm64]
+      CodeUri: ../../gateway/cutout/
+      Handler: cutout_function.lambda_handler
+      MemorySize: 3008  # also buys CPU: a cut-out takes a few seconds
+      Timeout: 120  # a new instance first copies the model from S3
+      EphemeralStorage:
+        Size: 1024  # the model (~225 MB) is kept in /tmp
+      ReservedConcurrentExecutions: !If [HasReservedConcurrency, 3, !Ref "AWS::NoValue"]
+      LoggingConfig:
+        LogGroup: !Ref CutoutLogGroup
+      Environment:
+        Variables:
+          MODEL_BUCKET: !Ref ModelBucket
+          MODEL_KEY: birefnet.onnx
+          MODEL_SHA256: !Ref CutoutModelSha256
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref ModelBucket
+
 Outputs:
   GatewayUrl:
     Description: The gateway's address. Put it in StitchPilot (stitchpilot/account.py GATEWAY_URL) without the trailing slash.
     Value: !GetAtt GatewayUrl.FunctionUrl
+  ModelBucket:
+    Description: Upload the cut-out model here as birefnet.onnx (deploy/aws/SUBSCRIPTION.md).
+    Value: !Ref ModelBucket

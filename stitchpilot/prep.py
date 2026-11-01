@@ -110,18 +110,9 @@ def _grabcut(rgb: np.ndarray, init_fg: np.ndarray | None) -> np.ndarray:
     return cv2.resize(fg, (w, h), interpolation=cv2.INTER_LINEAR) > 0
 
 
-def _ai_matte(rgba: np.ndarray) -> np.ndarray | None:
-    """Neural background removal with rembg, if installed."""
-    try:
-        from rembg import remove  # type: ignore
-    except Exception:
-        return None
-    out = remove(rgba[..., :3])
-    return np.asarray(out)[..., 3] >= 128
-
-
 def foreground_mask(rgba: np.ndarray, s: Settings, enclosed: bool = False) -> tuple[np.ndarray, str]:
-    """Return (mask, description of what was done)."""
+    """Return (mask, description of what was done). For "Cut out subject" this is the basic cut-out (GrabCut):
+    prepare() uses cutout.matte, which prefers an AI cut-out."""
     alpha = rgba[..., 3]
     if s.background == "keep":
         return alpha >= 128, "kept"
@@ -138,9 +129,6 @@ def foreground_mask(rgba: np.ndarray, s: Settings, enclosed: bool = False) -> tu
         share = float((np.linalg.norm(border - bg_lab, axis=1) < 10).mean())
     fg = _flood_background(lab, bg_lab, 14.0, enclosed) if share > 0.55 else None
     if s.background == "ai":
-        m = _ai_matte(rgba)
-        if m is not None:
-            return m, "AI matte (rembg)"
         return _grabcut(rgb, fg), "smart cut-out (GrabCut)"
     if fg is None:
         return np.ones(alpha.shape, bool), "no plain background found"
@@ -382,6 +370,14 @@ def prepare(rgba: np.ndarray | None, s: Settings, progress: Progress | None = No
     prog(0.02, "Finding the design…")
     crop = None
     if rgba is not None:
+        if s.background == "ai":  # cut out the subject first, on the picture as it was opened (cutout.remember)
+            from . import cutout
+
+            prog(0.01, "Cutting out the subject…")
+            alpha, _ = cutout.matte(rgba, lambda im: foreground_mask(im, s, s.remove_enclosed_bg)[0])
+            rgba = rgba.copy()
+            rgba[..., 3] = np.minimum(rgba[..., 3], alpha)
+            s = replace(s, background="keep")
         if s.text_fixes:  # AI text clean-up: redraw the picture's text crisply first
             from .textfix import apply_fixes
 

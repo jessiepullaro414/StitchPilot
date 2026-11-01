@@ -4,13 +4,14 @@ A project is a zip archive:
   project.json      settings and colour edits (see MainWindow.get_state)
   source/<name>     the original picture or embroidery file, byte for byte (keeps SVGs as vectors)
   stitches.npz      hand-edited stitches, only when the design was edited by hand
+  cutout.png        the subject cut out by StitchPilot Plus, so reopening never asks (and pays) again
 """
 from __future__ import annotations
 
 import io
 import json
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -20,6 +21,7 @@ from .digitize import ColorBlock
 
 EXT = ".stitchpilot"
 FORMAT = 1
+EXTRA_FILES = ("cutout.png",)
 
 
 @dataclass
@@ -29,6 +31,7 @@ class Project:
     source_bytes: bytes | None
     blocks: list[ColorBlock] | None  # hand-edited stitches (None = re-digitize from the picture)
     size_mm: tuple[float, float] | None
+    files: dict[str, bytes] = field(default_factory=dict)  # extra files (EXTRA_FILES) found in the project
 
 
 def _blocks_to_npz(blocks: list[ColorBlock]) -> tuple[bytes, list[dict]]:
@@ -57,7 +60,8 @@ def _blocks_from_npz(data: bytes, meta: list[dict]) -> list[ColorBlock]:
 
 
 def save(path: str | Path, state: dict, source_name: str | None = None, source_bytes: bytes | None = None,
-         blocks: list[ColorBlock] | None = None, size_mm: tuple[float, float] | None = None) -> Path:
+         blocks: list[ColorBlock] | None = None, size_mm: tuple[float, float] | None = None,
+         files: dict[str, bytes] | None = None) -> Path:
     """Write a project file atomically (a crash mid-save never leaves a half-written file)."""
     path = Path(path)
     doc = {"format": FORMAT, "app": f"StitchPilot {__version__}", "state": state,
@@ -71,6 +75,9 @@ def save(path: str | Path, state: dict, source_name: str | None = None, source_b
             z.writestr("stitches.npz", data, compress_type=zipfile.ZIP_STORED)  # already compressed
         if source_bytes is not None and source_name:
             z.writestr(f"source/{Path(source_name).name}", source_bytes)
+        for name, data in (files or {}).items():
+            if name in EXTRA_FILES and data:
+                z.writestr(name, data, compress_type=zipfile.ZIP_STORED)
         z.writestr("project.json", json.dumps(doc, indent=1))
     tmp.replace(path)
     return path
@@ -87,7 +94,8 @@ def load(path: str | Path) -> Project:
             blocks = None
             if doc.get("edited") and "stitches.npz" in z.namelist():
                 blocks = _blocks_from_npz(z.read("stitches.npz"), doc.get("blocks", []))
+            files = {n: z.read(n) for n in EXTRA_FILES if n in z.namelist()}
     except (zipfile.BadZipFile, KeyError, json.JSONDecodeError) as e:
         raise ValueError(f"This isn't a StitchPilot project, or it is damaged ({e.__class__.__name__}).")
     size = tuple(doc["size_mm"]) if doc.get("size_mm") else None
-    return Project(doc.get("state", {}), name, src, blocks, size)
+    return Project(doc.get("state", {}), name, src, blocks, size, files)
