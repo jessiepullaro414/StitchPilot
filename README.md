@@ -110,6 +110,7 @@ Everything is adjustable under *Show advanced stitch settings*.
 | **Batch convert** many pictures with the current settings | *File ▸ Batch convert pictures…* |
 | **Printable worksheet (PDF)** with preview, size, stitches, sew time and colour sequence | *File ▸ Print worksheet* |
 | **Preview on your fabric colour**, with the hoop outline and a play button for the sew-out | bar under the preview |
+| **Resize the design in the hoop.** Click it in the preview and drag a corner: the size shows in mm and inches as you drag, and it's stitched again at the new size so the stitches stay as dense as they should be. | click the design in *Stitches* |
 | **Jumps-only mode** for machines without a thread cutter | *My machine cuts threads automatically* |
 | **Rotate and mirror** | under the picture |
 | **Shape editing:** click a shape to change its stitch type (*Fill*, *Satin* or *Outline only*), drag its arrow (or type an angle) to turn the fill direction, make it denser or lighter, sew it first or last in its colour, or remove it (Del). Changed shapes get a dashed outline. Every change re-stitches the design, so hidden travel and corners stay right. Undo/redo with Ctrl+Z / Ctrl+Y, and changes are saved in projects. | *🧩 Edit shapes* (Ctrl+M) under the preview |

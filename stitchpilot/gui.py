@@ -280,7 +280,8 @@ def shape_path(geom, to_scene) -> QPainterPath:
 
 class StitchView(ZoomView):
     """Stitch preview that doubles as a stitch editor (select, move, delete, add needle points)
-    and a shape editor (pick a shape, drag its fill-direction arrow)."""
+    and a shape editor (pick a shape, drag its fill-direction arrow). Outside the editors, clicking the
+    design picks it: drag a corner to resize it."""
 
     PICK_PX = 8  # click tolerance in screen pixels
 
@@ -300,6 +301,9 @@ class StitchView(ZoomView):
         self.shape_mode = False
         self.shape: Shape | None = None  # selected shape (shape mode)
         self._angle: float | None = None  # fill angle while its arrow is being dragged
+        self.picked = False  # the design is picked for resizing
+        self._resize = None  # (centre mm, start distance mm, start factor, min, max) while a corner is dragged
+        self._sized = None  # (design, factor): the size it's being dragged to, shown until that design is replaced
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     # ---- coordinates
@@ -354,9 +358,89 @@ class StitchView(ZoomView):
                 return
         self.win.select_shape(self.win.design.shape_at(*xy, slack=self.tol_mm()))
 
+    # ---- resizing the whole design
+    def _factor(self) -> float:
+        return self._sized[1] if self._sized is not None and self._sized[0] is self.win.design else 1.0
+
+    def _box(self):
+        """(x0, y0, x1, y1) mm of the design, at the size it's being dragged to."""
+        x0, y0, x1, y1 = self.win.design.bounds()
+        f, cx, cy = self._factor(), (x0 + x1) / 2, (y0 + y1) / 2  # it stays centred in the hoop
+        return cx - (cx - x0) * f, cy - (cy - y0) * f, cx + (x1 - cx) * f, cy + (y1 - cy) * f
+
+    @staticmethod
+    def _corners(b) -> list[np.ndarray]:
+        return [np.array(c) for c in ((b[0], b[1]), (b[2], b[1]), (b[2], b[3]), (b[0], b[3]))]
+
+    def _corner_at(self, xy) -> int | None:
+        """Which corner handle (0 top-left, clockwise) is under the pointer, if the design is picked."""
+        if not (self.picked and self.has_image and self.win.can_resize()):
+            return None
+        for i, c in enumerate(self._corners(self._box())):
+            if np.hypot(*(xy - c)) < self.tol_mm() * 1.6:
+                return i
+        return None
+
+    def _resize_press(self, e) -> bool:
+        """Left click outside the editors: grab a corner (True), or pick / drop the design and pan as usual."""
+        if e.button() != Qt.MouseButton.LeftButton or not self.has_image or not self.win.can_resize():
+            self.picked = False
+            return False
+        xy = self.to_mm(self.mapToScene(e.position().toPoint()))
+        b = self._box()
+        if self._corner_at(xy) is not None:
+            c = np.array([(b[0] + b[2]) / 2, (b[1] + b[3]) / 2])
+            self._resize = (c, max(1e-6, float(np.hypot(*(xy - c)))), self._factor(), *self.win.resize_limits())
+            return True
+        was, self.picked = self.picked, bool(b[0] <= xy[0] <= b[2] and b[1] <= xy[1] <= b[3])
+        if self.picked and not was:
+            self.win.statusBar().showMessage("Drag a corner to make the design bigger or smaller "
+                                             "(Esc or click outside it when you're done).", 8000)
+        self.viewport().update()
+        return False
+
+    def _hover(self, e):
+        i = self._corner_at(self.to_mm(self.mapToScene(e.position().toPoint())))
+        self.viewport().setCursor(Qt.CursorShape.OpenHandCursor if i is None else
+                                  (Qt.CursorShape.SizeFDiagCursor, Qt.CursorShape.SizeBDiagCursor)[i % 2])
+
+    def _draw_resize(self, p: QPainter):
+        if not (self.picked and self.has_image and self.win.can_resize()):
+            return
+        scale = self.transform().m11()
+        b = self._box()
+        rect = QRectF(QPointF(*self._scene_xy(np.array(b[:2]))), QPointF(*self._scene_xy(np.array(b[2:]))))
+        acc = QColor(theme.current()["accent"])
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        for col, w, style in ((QColor("white"), 3.0, Qt.PenStyle.SolidLine), (acc, 1.5, Qt.PenStyle.DashLine)):
+            p.setPen(QPen(col, w / scale, style))
+            p.drawRect(rect)
+        p.setBrush(QColor("white"))
+        p.setPen(QPen(acc, 2.0 / scale))
+        for c in self._corners(b):  # handles: drag one to resize
+            p.drawEllipse(QPointF(*self._scene_xy(c)), 6 / scale, 6 / scale)
+        w, h = b[2] - b[0], b[3] - b[1]
+        text = f"{w:.0f} × {h:.0f} mm  ({w / 25.4:.2f} × {h / 25.4:.2f} in)"
+        p.save()
+        p.resetTransform()  # the label is drawn in screen pixels, above the box (below it if there's no room)
+        fm = p.fontMetrics()
+        tw, th = fm.horizontalAdvance(text) + 16, fm.height() + 8
+        top, bottom = self.mapFromScene(rect.center().x(), rect.top()), self.mapFromScene(rect.bottomLeft())
+        tag = QRectF(top.x() - tw / 2, top.y() - th - 10, tw, th)
+        if tag.top() < 4:
+            tag.moveTop(bottom.y() + 10)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(acc)
+        p.drawRoundedRect(tag, 6, 6)
+        p.setPen(QColor("white"))
+        p.drawText(tag, Qt.AlignmentFlag.AlignCenter, text)
+        p.restore()
+
     # ---- mouse / keys
     def mousePressEvent(self, e):
         if not (self.edit or self.shape_mode) or self.win.design is None:
+            if self._resize_press(e):
+                return
             return super().mousePressEvent(e)
         if e.button() in (Qt.MouseButton.MiddleButton, Qt.MouseButton.RightButton):
             self._pan = e.position()
@@ -395,6 +479,14 @@ class StitchView(ZoomView):
             self.verticalScrollBar().setValue(self.verticalScrollBar().value() - int(d.y()))
             self.fit = False
             return
+        if self._resize is not None:
+            c, r0, f0, lo, hi = self._resize
+            r = float(np.hypot(*(self.to_mm(self.mapToScene(e.position().toPoint())) - c)))
+            self._sized = (self.win.design, float(np.clip(f0 * r / r0, lo, hi)))
+            self.viewport().update()
+            return
+        if not (self.edit or self.shape_mode or e.buttons()):
+            self._hover(e)
         if self.shape_mode and self._angle is not None:
             arr = self.arrow()
             if arr is not None:
@@ -415,6 +507,15 @@ class StitchView(ZoomView):
     def mouseReleaseEvent(self, e):
         if self._pan is not None:
             self._pan = None
+            return
+        if self._resize is not None:
+            self._resize = None
+            f = self._factor()
+            if abs(f - 1) < 0.01:
+                self._sized = None
+            else:
+                self.win.resize_design(f)  # the box stays at the new size until the design is stitched again
+            self.viewport().update()
             return
         if self.shape_mode:
             if self._angle is not None:
@@ -457,6 +558,9 @@ class StitchView(ZoomView):
         elif self.edit and e.key() == Qt.Key.Key_Escape:
             self.sel = set()
             self.win.selection_changed()
+            self.viewport().update()
+        elif self.picked and e.key() == Qt.Key.Key_Escape:
+            self.picked = False
             self.viewport().update()
         else:
             super().keyPressEvent(e)
@@ -505,7 +609,10 @@ class StitchView(ZoomView):
         if self.shape_mode:
             self._draw_shapes(p)
             return
-        if not (self.edit and self.has_image and len(self.pts)):
+        if not self.edit:
+            self._draw_resize(p)
+            return
+        if not (self.has_image and len(self.pts)):
             return
         scale = self.transform().m11()
         sp = self._scene_xy(self.pts)
@@ -669,6 +776,7 @@ class MainWindow(QMainWindow):
         self.base: Design | None = None  # as digitized / loaded
         self.design: Design | None = None  # with the user's colour edits applied
         self.file_mode = False  # an embroidery file was opened (no picture to re-digitize)
+        self.size_frac = 1.0  # design size as a fraction of the max size (drag its corners in the preview)
         self.ai_palette: list | None = None
         self.ai_settings: Settings | None = None
         self.overrides: dict[tuple, tuple] = {}  # image colour -> user colour
@@ -1489,7 +1597,7 @@ class MainWindow(QMainWindow):
     def settings(self) -> Settings:
         ang = self.angle.currentData()  # "follow", "vary" or a fixed angle
         s = Settings(
-            max_width_mm=self.w_spin.value(), max_height_mm=self.h_spin.value(),
+            max_width_mm=self.w_spin.value() * self.size_frac, max_height_mm=self.h_spin.value() * self.size_frac,
             detail=1.0 - self.simp.value() / 100, background=self.bg.currentData(),
             merge_de=float(self.sp_merge.value()), min_shape_mm2=self.sp_min.value(),
             thin_lines=self.thin.currentData(), smooth=self.sp_smooth.value() / 100,
@@ -1552,11 +1660,13 @@ class MainWindow(QMainWindow):
 
     def _hoop_changed(self, name: str):
         if name in HOOPS:
+            old = self.w_spin.value(), self.h_spin.value()
             w, h = HOOPS[name]
             for sp, v in ((self.w_spin, w), (self.h_spin, h)):
                 sp.blockSignals(True)
                 sp.setValue(v - 2 * MARGIN_MM)
                 sp.blockSignals(False)
+            self._keep_size(*old)
         self.changed()
         self.render_stitches()
 
@@ -1566,6 +1676,41 @@ class MainWindow(QMainWindow):
             self.hoop.blockSignals(True)
             self.hoop.setCurrentText("Custom")
             self.hoop.blockSignals(False)
+        if not getattr(self, "_quiet", False):
+            self.size_frac = 1.0  # a typed max size is the size wanted
+        self.changed()
+
+    def _keep_size(self, old_w: float, old_h: float):
+        """After the max size changes, keep a design that was made smaller at the same size in mm
+        (as far as the new max size allows). A design that filled the old hoop fills the new one."""
+        d = self.design
+        if getattr(self, "_quiet", False) or self.size_frac >= 1 or d is None:
+            return
+        x0, y0, x1, y1 = d.bounds()
+        a = (x1 - x0) / max(1e-6, y1 - y0)  # it fits whichever of width / height runs out first
+        new = min(self.w_spin.value(), self.h_spin.value() * a)
+        self.size_frac = min(1.0, self.size_frac * min(old_w, old_h * a) / max(1e-6, new))
+
+    # ---- resizing the design by dragging its corners in the preview
+    def can_resize(self) -> bool:
+        return self.design is not None and self.can_convert() and not self.edits_fixed
+
+    def resize_limits(self) -> tuple[float, float]:
+        """How far a drag may scale the design: (smallest, largest) factor. It can't outgrow the max size
+        (the hoop) or shrink below 10 mm across."""
+        x0, y0, x1, y1 = self.design.bounds()
+        return min(1.0, max(10 / max(1e-6, x1 - x0, y1 - y0), 0.05 / self.size_frac)), 1 / self.size_frac
+
+    def resize_design(self, factor: float):
+        """Scale the design by `factor` and stitch it again at that size (stitches keep their density)."""
+        frac = float(np.clip(self.size_frac * factor, 0.05, 1.0))
+        if abs(frac - self.size_frac) < 1e-3:
+            self.v_st._sized = None
+            return
+        self.size_frac = frac
+        x0, y0, x1, y1 = self.design.bounds()
+        w, h = (x1 - x0) * factor, (y1 - y0) * factor
+        self.statusBar().showMessage(f"Stitching it again at {w:.0f} × {h:.0f} mm…", 6000)
         self.changed()
 
     def _fabric_changed(self, name: str):
@@ -1946,6 +2091,8 @@ class MainWindow(QMainWindow):
         self.busy = self.pending = self.ai_running = self.shape_ai = self.cut_ai = False
         self.cut_plus.setText("✨ Plus cut-out")
         self.file_mode = False
+        self.size_frac = 1.0
+        self.v_st.picked = False
         self._restore_blocks = self._restore_log = None
         self.shape_ai_btn.setText("✨ Suggest with AI")
         self.texts.clear()  # lettering belongs to the previous design
@@ -2078,7 +2225,8 @@ class MainWindow(QMainWindow):
         """Everything needed to rebuild this design exactly (saved in projects and autosaves)."""
         return {
             "machine": self.machine.currentText(), "hoop": self.hoop.currentText(),
-            "max_w": self.w_spin.value(), "max_h": self.h_spin.value(), "fabric": self.fabric.currentText(),
+            "max_w": self.w_spin.value(), "max_h": self.h_spin.value(), "size_frac": self.size_frac,
+            "fabric": self.fabric.currentText(),
             "colors": self.colors.currentData(), "ai_palette": [list(c) for c in (self.ai_palette or [])],
             "ai_bg": list(self.ai_settings.background_rgb) if self.ai_settings and self.ai_settings.background_rgb
             else None,
@@ -2117,6 +2265,7 @@ class MainWindow(QMainWindow):
             for sp, k in ((self.w_spin, "max_w"), (self.h_spin, "max_h")):
                 if k in s:
                     sp.setValue(float(s[k]))
+            self.size_frac = float(np.clip(float(s.get("size_frac", 1.0)), 0.05, 1.0))
             if s.get("fabric") in FABRICS:
                 self.fabric.setCurrentText(s["fabric"])
             self.ai_palette = [tup(c) for c in s.get("ai_palette") or []] or None
@@ -2439,6 +2588,7 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 100)
         self.progress.hide()
         self.statusBar().showMessage(f"Problem: {msg}", 15000)
+        self.v_st._sized = None  # a resize that didn't stitch: show the design's real size again
         if self.ai_running and self.cut_ai:
             self.ai_running = self.cut_ai = False
             self.cut_plus.setText("✨ Plus cut-out")
@@ -2588,6 +2738,8 @@ class MainWindow(QMainWindow):
         hw, hh = self.hoop_mm()
         fits = (x1 - x0) <= hw - 2 and (y1 - y0) <= hh - 2
         warn = "" if fits else f" <span style='color:{theme.current()['warn']}'>⚠ larger than the hoop</span>"
+        if fits and self.can_resize():
+            warn = f"<br><span style='color:{theme.current()['muted']}'>Click the design to resize it</span>"
         stops = f"<tr><td>Stops</td><td><b>{d.stop_count}</b> (appliqué)</td></tr>" if d.stop_count else ""
         self.stats.setText(
             f"<table cellspacing=4>"
