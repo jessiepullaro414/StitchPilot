@@ -129,6 +129,17 @@ w._on_done(w.gen, ("cutout", mask))
 wait_for(lambda: not w.busy and not w.debounce.isActive())
 assert "Plus" in w.cut_lbl.text() and not w.cut_plus.isEnabled()
 assert w.design is not None and w.design.prepared.source_rgba.shape[:2] == (400, 400), "only the cut-out is kept"
+# no onnxruntime (Intel Macs): no download offered, the basic cut-out is used and Plus is suggested
+real_ok, orig = cutout.runtime_ok, w.rgba
+cutout.runtime_ok = lambda: False
+w.rgba = orig.copy()
+w.rgba[0, 0, 0] ^= 1  # a picture without a cut-out yet
+w._update_cut_row()
+assert not w.cut_dl.isVisible() and "doesn't run on this computer" in w.cut_lbl.text() and w.cut_plus.isEnabled()
+assert cutout.matte(w.rgba[:50, :50].copy(), lambda im: np.ones(im.shape[:2], bool))[1] == cutout.BASIC
+cutout.runtime_ok, w.rgba = real_ok, orig
+assert cutout.runtime_ok()
+w._update_cut_row()
 path = tmp / "cut.stitchpilot"
 w._write_project(path)
 assert "cutout.png" in zipfile.ZipFile(path).namelist()

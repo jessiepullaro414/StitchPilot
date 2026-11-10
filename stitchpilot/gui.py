@@ -5,6 +5,7 @@ import copy
 import hashlib
 import math
 import os
+import platform
 import sys
 import tempfile
 import threading
@@ -1828,16 +1829,20 @@ class MainWindow(QMainWindow):
         if not show:
             return
         known = cutout.known(self.rgba)
-        ready = cutout.model_ready()
+        runs = cutout.runtime_ok()
+        ready = runs and cutout.model_ready()
         if known is not None and known[1] == cutout.CLOUD:
             self.cut_lbl.setText("✨ Cut out by StitchPilot Plus.")
+        elif not runs:
+            self.cut_lbl.setText("Using the basic cut-out, which can keep bits of background. The free AI cut-out "
+                                 "doesn't run on this computer; a Plus cut-out is much cleaner.")
         elif ready:
             self.cut_lbl.setText("Cut out with AI on this computer. For the finest edges (hair, fur), try a Plus "
                                  "cut-out.")
         else:
             self.cut_lbl.setText("Using the basic cut-out, which can keep bits of background. The free AI cut-out "
                                  "is much cleaner.")
-        self.cut_dl.setVisible(not ready)
+        self.cut_dl.setVisible(runs and not ready)
         self.cut_plus.setEnabled(not self.ai_running and not (known is not None and known[1] == cutout.CLOUD))
 
     def download_cutout(self):
@@ -3548,7 +3553,8 @@ def selftest(src: str, dst: str) -> int:
         import anthropic  # noqa: F401  (packaged for AI assist, which imports it on first use)
         import openai  # noqa: F401  (packaged for "Create with AI")
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey  # noqa: F401  (updates)
-        import onnxruntime  # noqa: F401  (the free AI cut-out, imported when it's first used)
+        if not (sys.platform == "darwin" and platform.machine() == "x86_64"):  # no build for Intel Macs
+            import onnxruntime  # noqa: F401  (the free AI cut-out, imported when it's first used)
 
         assert "embroidery" in imagegen.build_prompt("a frog")
         Path(dst + ".txt").write_text(f"ok {d.stitch_count} stitches {len(d.blocks)} colours, "

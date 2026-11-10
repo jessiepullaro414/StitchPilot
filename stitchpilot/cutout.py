@@ -5,7 +5,8 @@ Three ways, best first:
   person, one AI action per picture. Kept for that picture (remember()) and saved in the project, so
   changing settings never asks again.
 - ISNet, an open cut-out model run on this computer (onnxruntime). Free; downloaded once (MODEL, ~180 MB)
-  when the person agrees, checked against its SHA-256 before it's used.
+  when the person agrees, checked against its SHA-256 before it's used. onnxruntime has no build for Intel
+  Macs, so there it isn't offered (runtime_ok()).
 - GrabCut (OpenCV): always there, but it often keeps background or loses parts of the subject.
 
 matte() picks the best one available and caches the answer per picture.
@@ -14,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import importlib.util
 import json
 import os
 import sys
@@ -67,6 +69,14 @@ def model_dir() -> Path:
 
 def model_path() -> Path:
     return model_dir() / MODEL.file
+
+
+def runtime_ok() -> bool:
+    """Whether this computer can run the on-device model (onnxruntime is installed: not on Intel Macs)."""
+    try:
+        return importlib.util.find_spec("onnxruntime") is not None
+    except (ImportError, ValueError):
+        return False
 
 
 def model_ready() -> bool:
@@ -211,11 +221,12 @@ def matte(rgba: np.ndarray, basic) -> tuple[np.ndarray, str]:
     """(alpha 0..255, how) for the subject of this picture: a Plus cut-out if there is one, else the on-device
     model if it's downloaded, else basic(rgba) (GrabCut, a bool mask)."""
     k = key(rgba)
+    usable = model_ready() and runtime_ok()
     with _cache_lock:
         hit = _cache.get(k)
-    if hit is not None and (hit[1] != BASIC or not model_ready()):
+    if hit is not None and (hit[1] != BASIC or not usable):
         return hit
-    if model_ready():
+    if usable:
         try:
             res = (on_device(rgba), ON_DEVICE)
         except Exception:  # a broken download or a missing runtime: fall back rather than fail the design
